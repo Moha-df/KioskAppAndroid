@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Kiosk</string>
+    <string name="device_admin_label">Kiosk Device Admin</string>
+    <string name="device_admin_description">Permet à l\'application de contrôler le mode Kiosk et les restrictions d\'accès</string>
+</resources>
