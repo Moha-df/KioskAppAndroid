@@ -46,8 +46,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var alarmManager: AlarmManager
 
     private var isKioskMode = false
-    private var currentUrl = "https://www.youtube.com"
-    private val kioskPassword = "1234" // Vous pouvez le modifier
+    private var currentUrl = "https://www.google.com"
+    private val kioskPassword = "2143" // Vous pouvez le modifier
+    private var isDialogShowing = false
 
     // Plage horaire pour maintenir l'écran allumé
     private var wakeStartHour = 8
@@ -55,6 +56,14 @@ class MainActivity : AppCompatActivity() {
     private var wakeEndHour = 18
     private var wakeEndMinute = 0
     private var isInWakeTimeRange = false
+
+    // SharedPreferences pour sauvegarder les paramètres
+    private val PREFS_NAME = "KioskSettings"
+    private val KEY_URL = "current_url"
+    private val KEY_WAKE_START_HOUR = "wake_start_hour"
+    private val KEY_WAKE_START_MINUTE = "wake_start_minute"
+    private val KEY_WAKE_END_HOUR = "wake_end_hour"
+    private val KEY_WAKE_END_MINUTE = "wake_end_minute"
 
     private lateinit var screenReceiver: BroadcastReceiver
     private lateinit var timeReceiver: BroadcastReceiver
@@ -64,12 +73,18 @@ class MainActivity : AppCompatActivity() {
     private var autoWakeHandler: Handler? = null
     private var autoWakeRunnable: Runnable? = null
 
+    // Système de triple-clic pour l'admin
+    private var clickCount = 0
+    private var lastClickTime = 0L
+    private val TRIPLE_CLICK_TIMEOUT = 1000L // 1 seconde pour faire 3 clics
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContentView(R.layout.activity_main)
 
         initializeComponents()
+        loadSavedSettings() // Charger les paramètres sauvegardés
         setupWebView()
         setupReceivers()
         checkWakeTimeRange()
@@ -103,11 +118,125 @@ class MainActivity : AppCompatActivity() {
         )
 
         configButton.setOnClickListener {
-            if (isKioskMode) {
-                showPasswordDialog()
+            handleAdminButtonClick()
+        }
+
+        // Initialiser le style du bouton
+        updateButtonStyle()
+    }
+
+    private fun loadSavedSettings() {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+        // Charger l'URL sauvegardée (ou garder la valeur par défaut)
+        currentUrl = prefs.getString(KEY_URL, currentUrl) ?: currentUrl
+
+        // Charger les horaires sauvegardés (ou garder les valeurs par défaut)
+        wakeStartHour = prefs.getInt(KEY_WAKE_START_HOUR, wakeStartHour)
+        wakeStartMinute = prefs.getInt(KEY_WAKE_START_MINUTE, wakeStartMinute)
+        wakeEndHour = prefs.getInt(KEY_WAKE_END_HOUR, wakeEndHour)
+        wakeEndMinute = prefs.getInt(KEY_WAKE_END_MINUTE, wakeEndMinute)
+    }
+
+    private fun saveSettings() {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val editor = prefs.edit()
+
+        // Sauvegarder l'URL
+        editor.putString(KEY_URL, currentUrl)
+
+        // Sauvegarder les horaires
+        editor.putInt(KEY_WAKE_START_HOUR, wakeStartHour)
+        editor.putInt(KEY_WAKE_START_MINUTE, wakeStartMinute)
+        editor.putInt(KEY_WAKE_END_HOUR, wakeEndHour)
+        editor.putInt(KEY_WAKE_END_MINUTE, wakeEndMinute)
+
+        // Appliquer les changements
+        editor.apply()
+    }
+
+    private fun handleAdminButtonClick() {
+        // Si une boîte de dialogue est déjà affichée, ne rien faire
+        if (isDialogShowing) {
+            return
+        }
+
+        val currentTime = System.currentTimeMillis()
+
+        if (isKioskMode) {
+            // En mode kiosk : nécessite un triple-clic rapide
+            if (currentTime - lastClickTime > TRIPLE_CLICK_TIMEOUT) {
+                // Reset si trop de temps écoulé
+                clickCount = 1
             } else {
-                showConfigDialog()
+                clickCount++
             }
+
+            lastClickTime = currentTime
+
+            when (clickCount) {
+                1 -> {
+                    // Premier clic - pas de feedback visible pour rester discret
+                }
+                2 -> {
+                    // Deuxième clic
+                }
+                3 -> {
+                    // Triple-clic
+                }
+                4 -> {
+                    //  la boîte de dialogue
+                    clickCount = 0
+                    showPasswordDialog()
+                }
+            }
+
+            // Reset automatique après timeout
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (System.currentTimeMillis() - lastClickTime >= TRIPLE_CLICK_TIMEOUT) {
+                    clickCount = 0
+                }
+            }, TRIPLE_CLICK_TIMEOUT)
+
+        } else {
+            // Mode normal : ouverture directe
+            showConfigDialog()
+        }
+    }
+
+    private fun updateButtonStyle() {
+        if (isKioskMode) {
+            // Mode kiosk : bouton quasi invisible
+            configButton.text = "ADMIN"
+            configButton.alpha = 0.08f // Légèrement plus visible pour voir le texte
+            configButton.textSize = 10f // Taille légèrement plus grande
+
+            // Couleur très discrète
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                configButton.backgroundTintList = resources.getColorStateList(android.R.color.transparent, null)
+            } else {
+                configButton.setBackgroundColor(resources.getColor(android.R.color.transparent))
+            }
+            configButton.setTextColor(resources.getColor(android.R.color.darker_gray))
+
+            // Ajuster le padding pour un meilleur affichage du texte
+            configButton.setPadding(8, 4, 8, 4)
+
+        } else {
+            // Mode normal : bouton bien visible
+            configButton.text = "CONFIG"
+            configButton.alpha = 1.0f
+            configButton.textSize = 12f
+
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                configButton.backgroundTintList = resources.getColorStateList(android.R.color.holo_blue_bright, null)
+            } else {
+                configButton.setBackgroundColor(resources.getColor(android.R.color.holo_blue_bright))
+            }
+            configButton.setTextColor(resources.getColor(android.R.color.white))
+
+            // Padding normal
+            configButton.setPadding(16, 8, 16, 8)
         }
     }
 
@@ -151,15 +280,12 @@ class MainActivity : AppCompatActivity() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
                     Intent.ACTION_SCREEN_OFF -> {
-                        Toast.makeText(this@MainActivity, "DEBUG: Écran éteint - Mode:$isKioskMode Plage:$isInWakeTimeRange", Toast.LENGTH_SHORT).show()
                         if (isInWakeTimeRange && isKioskMode) {
                             // L'écran s'est éteint pendant la plage horaire - réveil immédiat
-                            Toast.makeText(this@MainActivity, "DEBUG: Programmation réveil immédiat", Toast.LENGTH_SHORT).show()
                             scheduleImmediateWakeup()
                         }
                     }
                     Intent.ACTION_SCREEN_ON -> {
-                        Toast.makeText(this@MainActivity, "DEBUG: Écran allumé", Toast.LENGTH_SHORT).show()
                         // Écran rallumé - maintenir allumé si dans la plage
                         cancelAutoWakeup()
                         if (isInWakeTimeRange && isKioskMode) {
@@ -381,33 +507,56 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPasswordDialog() {
+        isDialogShowing = true
         val dialogView = layoutInflater.inflate(R.layout.dialog_password, null)
         val passwordEdit = dialogView.findViewById<EditText>(R.id.passwordEdit)
+        val okButton = dialogView.findViewById<Button>(R.id.okButton)
+        val cancelButton = dialogView.findViewById<Button>(R.id.cancelButton)
 
-        AlertDialog.Builder(this)
-            .setTitle("Mot de passe requis")
+        val dialog = AlertDialog.Builder(this)
             .setView(dialogView)
-            .setPositiveButton("OK") { _, _ ->
-                if (passwordEdit.text.toString() == kioskPassword) {
-                    showConfigDialog()
-                } else {
-                    Toast.makeText(this, "Mot de passe incorrect", Toast.LENGTH_SHORT).show()
-                }
+            .create()
+
+        // Forcer les coins arrondis
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+
+        // Gérer les clics sur nos boutons personnalisés
+        okButton.setOnClickListener {
+            if (passwordEdit.text.toString() == kioskPassword) {
+                dialog.dismiss()
+                showConfigDialog()
+            } else {
+                // Mot de passe incorrect - pas de feedback
             }
-            .setNegativeButton("Annuler", null)
-            .show()
+        }
+
+        cancelButton.setOnClickListener {
+            dialog.dismiss()
+        }
+
+        dialog.setOnDismissListener {
+            isDialogShowing = false
+        }
+
+        dialog.show()
     }
 
     private fun showConfigDialog() {
+        isDialogShowing = true
         val dialogView = layoutInflater.inflate(R.layout.dialog_config, null)
         val urlEdit = dialogView.findViewById<EditText>(R.id.urlEdit)
         val startTimePicker = dialogView.findViewById<TimePicker>(R.id.startTimePicker)
         val endTimePicker = dialogView.findViewById<TimePicker>(R.id.endTimePicker)
         val toggleKioskButton = dialogView.findViewById<Button>(R.id.toggleKioskButton)
+        val applyButton = dialogView.findViewById<Button>(R.id.applyButton)
+        val cancelConfigButton = dialogView.findViewById<Button>(R.id.cancelConfigButton)
 
         urlEdit.setText(currentUrl)
 
         // Vérifier la version Android pour TimePicker
+        startTimePicker.setIs24HourView(true) // Forcer format 24h
+        endTimePicker.setIs24HourView(true)   // Forcer format 24h
+
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
             startTimePicker.hour = wakeStartHour
             startTimePicker.minute = wakeStartMinute
@@ -424,40 +573,98 @@ class MainActivity : AppCompatActivity() {
             endTimePicker.currentMinute = wakeEndMinute
         }
 
-        toggleKioskButton.text = if (isKioskMode) "DÉSACTIVER KIOSK" else "ACTIVER KIOSK"
+        // État local du toggle (ne modifie pas le vrai mode immédiatement)
+        var pendingKioskMode = isKioskMode
+
+        // Fonction pour mettre à jour l'affichage du bouton
+        fun updateToggleButton() {
+            toggleKioskButton.text = if (pendingKioskMode) "DÉSACTIVER KIOSK" else "ACTIVER KIOSK"
+
+            // Changer la couleur du bouton
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                toggleKioskButton.backgroundTintList = if (pendingKioskMode) {
+                    resources.getColorStateList(android.R.color.holo_red_dark, null)
+                } else {
+                    resources.getColorStateList(android.R.color.holo_orange_dark, null)
+                }
+            } else {
+                // Fallback pour versions plus anciennes
+                toggleKioskButton.setBackgroundColor(if (pendingKioskMode) {
+                    resources.getColor(android.R.color.holo_red_dark)
+                } else {
+                    resources.getColor(android.R.color.holo_orange_dark)
+                })
+            }
+        }
+
+        // Initialiser l'affichage du bouton
+        updateToggleButton()
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Configuration")
             .setView(dialogView)
-            .setPositiveButton("Appliquer") { _, _ ->
-                currentUrl = urlEdit.text.toString()
-
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                    wakeStartHour = startTimePicker.hour
-                    wakeStartMinute = startTimePicker.minute
-                    wakeEndHour = endTimePicker.hour
-                    wakeEndMinute = endTimePicker.minute
-                } else {
-                    @Suppress("DEPRECATION")
-                    wakeStartHour = startTimePicker.currentHour
-                    @Suppress("DEPRECATION")
-                    wakeStartMinute = startTimePicker.currentMinute
-                    @Suppress("DEPRECATION")
-                    wakeEndHour = endTimePicker.currentHour
-                    @Suppress("DEPRECATION")
-                    wakeEndMinute = endTimePicker.currentMinute
-                }
-
-                loadUrl(currentUrl)
-                checkWakeTimeRange()
-                scheduleWakeAlarms()
-            }
-            .setNegativeButton("Annuler", null)
             .create()
 
-        toggleKioskButton.setOnClickListener {
-            toggleKioskMode()
+        // Forcer les coins arrondis
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+
+        // Gérer le bouton Appliquer
+        applyButton.setOnClickListener {
+            // Appliquer l'URL et les horaires
+            currentUrl = urlEdit.text.toString()
+
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                wakeStartHour = startTimePicker.hour
+                wakeStartMinute = startTimePicker.minute
+                wakeEndHour = endTimePicker.hour
+                wakeEndMinute = endTimePicker.minute
+            } else {
+                @Suppress("DEPRECATION")
+                wakeStartHour = startTimePicker.currentHour
+                @Suppress("DEPRECATION")
+                wakeStartMinute = startTimePicker.currentMinute
+                @Suppress("DEPRECATION")
+                wakeEndHour = endTimePicker.currentHour
+                @Suppress("DEPRECATION")
+                wakeEndMinute = endTimePicker.currentMinute
+            }
+
+            // SAUVEGARDER LES NOUVEAUX PARAMÈTRES
+            saveSettings()
+
+            loadUrl(currentUrl)
+            checkWakeTimeRange()
+            scheduleWakeAlarms()
+
+            // Appliquer le changement de mode kiosk SEULEMENT maintenant
+            if (pendingKioskMode != isKioskMode) {
+                if (pendingKioskMode) {
+                    enterKioskMode()
+                } else {
+                    exitKioskMode()
+                }
+            }
+
             dialog.dismiss()
+        }
+
+        // Gérer le bouton Annuler
+        cancelConfigButton.setOnClickListener {
+            dialog.dismiss()
+        }
+
+        // Le bouton toggle change seulement l'état local, sans fermer la popup
+        toggleKioskButton.setOnClickListener {
+            if (!devicePolicyManager.isDeviceOwnerApp(packageName)) {
+                return@setOnClickListener
+            }
+
+            // Inverser l'état local seulement
+            pendingKioskMode = !pendingKioskMode
+            updateToggleButton()
+        }
+
+        dialog.setOnDismissListener {
+            isDialogShowing = false
         }
 
         dialog.show()
@@ -465,7 +672,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleKioskMode() {
         if (!devicePolicyManager.isDeviceOwnerApp(packageName)) {
-            Toast.makeText(this, "L'app doit être Device Owner", Toast.LENGTH_LONG).show()
             return
         }
 
@@ -488,15 +694,19 @@ class MainActivity : AppCompatActivity() {
             startLockTask()
 
             isKioskMode = true
-            configButton.text = "⚙️"
+
+            // Mettre à jour le style du bouton pour le rendre quasi invisible
+            updateButtonStyle()
+
+            // Reset du compteur de clics
+            clickCount = 0
+            lastClickTime = 0L
 
             // Vérifier si on doit maintenir l'écran allumé
             checkWakeTimeRange()
 
-            Toast.makeText(this, "Mode Kiosk ACTIVÉ", Toast.LENGTH_SHORT).show()
-
         } catch (e: Exception) {
-            Toast.makeText(this, "Erreur: ${e.message}", Toast.LENGTH_LONG).show()
+            // Erreur lors de l'activation du mode kiosk
         }
     }
 
@@ -512,7 +722,13 @@ class MainActivity : AppCompatActivity() {
             devicePolicyManager.setLockTaskPackages(adminComponent, arrayOf())
 
             isKioskMode = false
-            configButton.text = "CONFIG"
+
+            // Remettre le bouton visible
+            updateButtonStyle()
+
+            // Reset du compteur de clics
+            clickCount = 0
+            lastClickTime = 0L
 
             // Annuler les réveils automatiques
             cancelAutoWakeup()
@@ -525,10 +741,8 @@ class MainActivity : AppCompatActivity() {
                 fullWakeLock.release()
             }
 
-            Toast.makeText(this, "Mode Kiosk DÉSACTIVÉ", Toast.LENGTH_SHORT).show()
-
         } catch (e: Exception) {
-            Toast.makeText(this, "Erreur: ${e.message}", Toast.LENGTH_LONG).show()
+            // Erreur lors de la désactivation du mode kiosk
         }
     }
 

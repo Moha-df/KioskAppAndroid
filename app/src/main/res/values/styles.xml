@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Vos styles existants ici... -->
+
+    <!-- Nouveau style pour les TimePickers -->
+    <style name="CustomTimePickerTheme" parent="android:Theme.Material.Light">
+        <item name="android:colorPrimary">#E53E3E</item>
+        <item name="android:colorPrimaryDark">#C53030</item>
+        <item name="android:colorAccent">#E53E3E</item>
+        <item name="android:textColorPrimary">#2D3748</item>
+        <item name="android:textColorSecondary">#718096</item>
+    </style>
+
+</resources>
