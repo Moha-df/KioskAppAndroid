@@ -64,6 +64,7 @@ class MainActivity : AppCompatActivity() {
     private val KEY_WAKE_START_MINUTE = "wake_start_minute"
     private val KEY_WAKE_END_HOUR = "wake_end_hour"
     private val KEY_WAKE_END_MINUTE = "wake_end_minute"
+    private val KEY_LAST_CACHE_CLEAR = "last_cache_clear_date"
 
     private lateinit var screenReceiver: BroadcastReceiver
     private lateinit var timeReceiver: BroadcastReceiver
@@ -73,10 +74,14 @@ class MainActivity : AppCompatActivity() {
     private var autoWakeHandler: Handler? = null
     private var autoWakeRunnable: Runnable? = null
 
+    // Propriétés pour la vérification périodique du cache
+    private lateinit var cacheCheckHandler: Handler
+    private var cacheCheckRunnable: Runnable? = null
+
     // Système de triple-clic pour l'admin
     private var clickCount = 0
     private var lastClickTime = 0L
-    private val TRIPLE_CLICK_TIMEOUT = 1000L // 1 seconde pour faire 3 clics
+    private val QUADRUPLE_CLICK_TIMEOUT = 1000L // 1 seconde pour faire 4 clics
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -84,7 +89,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         initializeComponents()
-        loadSavedSettings() // Charger les paramètres sauvegardés
+        loadSavedSettings()
         setupWebView()
         setupReceivers()
         checkWakeTimeRange()
@@ -101,6 +106,9 @@ class MainActivity : AppCompatActivity() {
         adminComponent = ComponentName(this, KioskDeviceAdminReceiver::class.java)
         powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+        // Initialiser le handler pour la vérification du cache
+        cacheCheckHandler = Handler(Looper.getMainLooper())
 
         webView = findViewById(R.id.webView)
         configButton = findViewById(R.id.configButton)
@@ -165,7 +173,7 @@ class MainActivity : AppCompatActivity() {
 
         if (isKioskMode) {
             // En mode kiosk : nécessite un triple-clic rapide
-            if (currentTime - lastClickTime > TRIPLE_CLICK_TIMEOUT) {
+            if (currentTime - lastClickTime > QUADRUPLE_CLICK_TIMEOUT) {
                 // Reset si trop de temps écoulé
                 clickCount = 1
             } else {
@@ -193,10 +201,10 @@ class MainActivity : AppCompatActivity() {
 
             // Reset automatique après timeout
             Handler(Looper.getMainLooper()).postDelayed({
-                if (System.currentTimeMillis() - lastClickTime >= TRIPLE_CLICK_TIMEOUT) {
+                if (System.currentTimeMillis() - lastClickTime >= QUADRUPLE_CLICK_TIMEOUT) {
                     clickCount = 0
                 }
-            }, TRIPLE_CLICK_TIMEOUT)
+            }, QUADRUPLE_CLICK_TIMEOUT)
 
         } else {
             // Mode normal : ouverture directe
@@ -259,8 +267,11 @@ class MainActivity : AppCompatActivity() {
         val webSettings = webView.settings
         webSettings.javaScriptEnabled = true
         webSettings.domStorageEnabled = true
-        webSettings.databaseEnabled = false
-        webSettings.cacheMode = WebSettings.LOAD_NO_CACHE // Changer de LOAD_NO_CACHE à LOAD_DEFAULT si probleme
+        webSettings.databaseEnabled = true
+
+        // Configuration moderne du cache
+        webSettings.cacheMode = WebSettings.LOAD_DEFAULT
+
         webSettings.setSupportZoom(true)
         webSettings.builtInZoomControls = true
         webSettings.displayZoomControls = false
@@ -272,7 +283,72 @@ class MainActivity : AppCompatActivity() {
         webSettings.useWideViewPort = true
         webSettings.loadWithOverviewMode = true
 
+        // Vérifier si le cache doit être vidé quotidiennement
+        checkDailyCacheClear()
+
         loadUrl(currentUrl)
+    }
+
+    private fun checkDailyCacheClear() {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val today = getCurrentDateString()
+        val lastClearDate = prefs.getString(KEY_LAST_CACHE_CLEAR, "")
+
+        if (lastClearDate != today) {
+            // Nouveau jour = vider le cache
+            clearDailyCache()
+
+            // Sauvegarder la date du jour
+            prefs.edit().putString(KEY_LAST_CACHE_CLEAR, today).apply()
+        }
+    }
+
+    private fun getCurrentDateString(): String {
+        val calendar = Calendar.getInstance()
+        return "${calendar.get(Calendar.YEAR)}-${calendar.get(Calendar.MONTH)}-${calendar.get(Calendar.DAY_OF_MONTH)}"
+    }
+
+    private fun clearDailyCache() {
+        try {
+            // Vider le cache WebView
+            webView.clearCache(true)
+
+            // Vider aussi les données stockées localement
+            webView.clearFormData()
+            webView.clearHistory()
+
+            // Pour Android 21+, vider aussi le stockage Web
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                android.webkit.CookieManager.getInstance().removeAllCookies(null)
+                android.webkit.WebStorage.getInstance().deleteAllData()
+            }
+
+            // IMPORTANT: Recharger la page après vidage du cache
+            webView.reload()
+
+        } catch (e: Exception) {
+            // Log l'erreur si nécessaire
+        }
+    }
+
+    // Démarrer la vérification périodique du cache
+    private fun startPeriodicCacheCheck() {
+        cacheCheckRunnable = object : Runnable {
+            override fun run() {
+                checkDailyCacheClear()
+                // Revérifier toutes les heures
+                cacheCheckHandler.postDelayed(this, 60 * 60 * 1000L) // 1 heure
+            }
+        }
+        // Première vérification dans 1 heure
+        cacheCheckHandler.postDelayed(cacheCheckRunnable!!, 60 * 60 * 1000L)
+    }
+
+    private fun stopPeriodicCacheCheck() {
+        cacheCheckRunnable?.let { runnable ->
+            cacheCheckHandler.removeCallbacks(runnable)
+        }
+        cacheCheckRunnable = null
     }
 
     private fun setupReceivers() {
@@ -305,6 +381,8 @@ class MainActivity : AppCompatActivity() {
         timeReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 checkWakeTimeRange()
+                // Vérifier aussi le cache quotidiennement à chaque minute
+                checkDailyCacheClear()
             }
         }
 
@@ -320,6 +398,9 @@ class MainActivity : AppCompatActivity() {
 
         registerReceiver(screenReceiver, screenFilter)
         registerReceiver(timeReceiver, timeFilter)
+
+        // Démarrer la vérification périodique du cache
+        startPeriodicCacheCheck()
     }
 
     private fun enforceScreenAlwaysOn() {
@@ -609,8 +690,12 @@ class MainActivity : AppCompatActivity() {
 
         // Gérer le bouton Appliquer
         applyButton.setOnClickListener {
-            // Appliquer l'URL et les horaires
-            currentUrl = urlEdit.text.toString()
+            // Récupérer la nouvelle URL
+            val newUrl = urlEdit.text.toString()
+
+            // TOUJOURS vider le cache quand on applique
+            currentUrl = newUrl
+            loadUrl(currentUrl)
 
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
                 wakeStartHour = startTimePicker.hour
@@ -631,7 +716,6 @@ class MainActivity : AppCompatActivity() {
             // SAUVEGARDER LES NOUVEAUX PARAMÈTRES
             saveSettings()
 
-            loadUrl(currentUrl)
             checkWakeTimeRange()
             scheduleWakeAlarms()
 
@@ -775,8 +859,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadUrl(url: String) {
-        // Nettoyer le cache seulement avant de charger une nouvelle URL
-        webView.clearCache(false) // false = garder le cache des ressources partagées
+        webView.clearCache(true)
         webView.clearHistory()
 
         // Vérifier que l'URL a un protocole
@@ -887,6 +970,7 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         try {
             cancelAutoWakeup()
+            stopPeriodicCacheCheck() // Arrêter la vérification du cache
             unregisterReceiver(screenReceiver)
             unregisterReceiver(timeReceiver)
 
