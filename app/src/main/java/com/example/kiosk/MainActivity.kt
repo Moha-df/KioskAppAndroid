@@ -216,7 +216,7 @@ class MainActivity : AppCompatActivity() {
         if (isKioskMode) {
             // Mode kiosk : bouton quasi invisible
             configButton.text = "ADMIN"
-            configButton.alpha = 0.08f // Légèrement plus visible pour voir le texte
+            configButton.alpha = 0.0f // Légèrement plus visible pour voir le texte
             configButton.textSize = 10f // Taille légèrement plus grande
 
             // Couleur très discrète
@@ -596,7 +596,10 @@ class MainActivity : AppCompatActivity() {
 
         val dialog = AlertDialog.Builder(this)
             .setView(dialogView)
+            .setCancelable(false)
             .create()
+
+        dialog.setCanceledOnTouchOutside(false)
 
         // Forcer les coins arrondis
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
@@ -683,7 +686,10 @@ class MainActivity : AppCompatActivity() {
 
         val dialog = AlertDialog.Builder(this)
             .setView(dialogView)
+            .setCancelable(false)
             .create()
+
+        dialog.setCanceledOnTouchOutside(false)
 
         // Forcer les coins arrondis
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
