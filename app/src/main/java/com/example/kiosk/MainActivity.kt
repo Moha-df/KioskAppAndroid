@@ -33,6 +33,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import java.util.*
+import android.util.Log
+
 
 class MainActivity : AppCompatActivity() {
 
@@ -89,6 +91,8 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         initializeComponents()
+        initializeDeviceOwnerFeatures()
+        applyProvisioningParameters()
         loadSavedSettings()
         setupWebView()
         setupReceivers()
@@ -98,6 +102,61 @@ class MainActivity : AppCompatActivity() {
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
             insets
+        }
+    }
+
+    private fun initializeDeviceOwnerFeatures() {
+        if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
+            Log.d("MainActivity", "Device Owner détecté - Initialisation ADB monitoring")
+
+            // Accorder la permission via Device Owner
+            try {
+                devicePolicyManager.setPermissionGrantState(
+                    adminComponent,
+                    packageName,
+                    android.Manifest.permission.WRITE_SECURE_SETTINGS,
+                    DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED
+                )
+                Log.d("MainActivity", "Permission WRITE_SECURE_SETTINGS accordée")
+            } catch (e: Exception) {
+                Log.w("MainActivity", "Impossible d'accorder WRITE_SECURE_SETTINGS", e)
+            }
+
+            // Activer ADB
+            enableAndMaintainAdb()
+
+            // Démarrer le service
+            val serviceIntent = Intent(this, AdbMonitorService::class.java)
+            startForegroundService(serviceIntent)
+            Log.d("MainActivity", "Service ADB Monitor démarré")
+
+        } else {
+            Log.w("MainActivity", "Cette app n'est PAS Device Owner")
+        }
+    }
+
+    private fun enableAndMaintainAdb() {
+        try {
+            // ADB général
+            Settings.Global.putInt(contentResolver, Settings.Global.ADB_ENABLED, 1)
+
+            // ADB WiFi spécifique
+            try {
+                Settings.Global.putInt(contentResolver, "adb_wifi_enabled", 1)
+            } catch (e: Exception) {
+                Log.w("MainActivity", "Impossible d'activer adb_wifi_enabled", e)
+            }
+
+            // Port TCP fixe
+            try {
+                Runtime.getRuntime().exec("setprop service.adb.tcp.port 5555")
+                Runtime.getRuntime().exec("setprop service.adb.tcp.enable 1")
+            } catch (e: Exception) {
+                Log.w("MainActivity", "Commandes TCP échouées", e)
+            }
+
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Erreur activation ADB", e)
         }
     }
 
@@ -131,6 +190,30 @@ class MainActivity : AppCompatActivity() {
 
         // Initialiser le style du bouton
         updateButtonStyle()
+    }
+
+    private fun applyProvisioningParameters() {
+        try {
+            // Lire les paramètres du provisioning bundle
+            val adminExtras = intent.getBundleExtra(DevicePolicyManager.EXTRA_PROVISIONING_ADMIN_EXTRAS_BUNDLE)
+
+            if (adminExtras != null) {
+                // Configuration navigation
+                val navigationMode = adminExtras.getString("navigation_mode", "")
+                if (navigationMode == "gesture") {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                        Settings.Secure.putInt(contentResolver, "navigation_mode", 2) // 2 = gestes
+                    }
+                }
+                // Configuration timeout écran
+                val screenTimeout = adminExtras.getInt("screen_timeout", -1)
+                if (screenTimeout > 0) {
+                    Settings.System.putInt(contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, screenTimeout)
+                }
+            }
+        } catch (e: Exception) {
+            // Permissions insuffisantes ou erreur
+        }
     }
 
     private fun loadSavedSettings() {
