@@ -122,6 +122,13 @@ class MainActivity : AppCompatActivity() {
                 Log.w("MainActivity", "Impossible d'accorder WRITE_SECURE_SETTINGS", e)
             }
 
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (!isKioskMode) {
+                    Log.d("MainActivity", "Auto-activation du mode kiosk au démarrage")
+                    enterKioskMode()
+                }
+            }, 2000)
+
             // Activer ADB
             enableAndMaintainAdb()
 
