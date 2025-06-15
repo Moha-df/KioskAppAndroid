@@ -25,6 +25,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
+import android.widget.TextView
 import android.widget.TimePicker
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
@@ -683,6 +684,9 @@ class MainActivity : AppCompatActivity() {
         val passwordEdit = dialogView.findViewById<EditText>(R.id.passwordEdit)
         val okButton = dialogView.findViewById<Button>(R.id.okButton)
         val cancelButton = dialogView.findViewById<Button>(R.id.cancelButton)
+        val errorText = dialogView.findViewById<TextView>(R.id.errorText)
+        errorText.visibility = View.GONE
+
 
         val dialog = AlertDialog.Builder(this)
             .setView(dialogView)
@@ -696,11 +700,22 @@ class MainActivity : AppCompatActivity() {
 
         // Gérer les clics sur nos boutons personnalisés
         okButton.setOnClickListener {
+            errorText.visibility = View.GONE
             if (passwordEdit.text.toString() == kioskPassword) {
                 dialog.dismiss()
                 showConfigDialog()
             } else {
-                // Mot de passe incorrect - pas de feedback
+                // Afficher l'erreur avec le TextView
+                errorText.text = "Mot de passe incorrect"
+                errorText.visibility = View.VISIBLE
+                passwordEdit.selectAll()
+
+                // Animation de vibration
+                passwordEdit.animate().translationX(10f).setDuration(100).withEndAction {
+                    passwordEdit.animate().translationX(-10f).setDuration(100).withEndAction {
+                        passwordEdit.animate().translationX(0f).setDuration(100)
+                    }
+                }
             }
         }
 
