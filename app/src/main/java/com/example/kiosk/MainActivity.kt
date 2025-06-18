@@ -10,6 +10,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -20,6 +22,8 @@ import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -36,7 +40,6 @@ import androidx.core.view.WindowInsetsCompat
 import java.util.*
 import android.util.Log
 
-
 class MainActivity : AppCompatActivity() {
 
     private lateinit var devicePolicyManager: DevicePolicyManager
@@ -50,7 +53,7 @@ class MainActivity : AppCompatActivity() {
 
     private var isKioskMode = false
     private var currentUrl = "https://www.google.com"
-    private val kioskPassword = "2143" // Vous pouvez le modifier
+    private val kioskPassword = "2143"
     private var isDialogShowing = false
 
     // Plage horaire pour maintenir l'écran allumé
@@ -81,10 +84,20 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cacheCheckHandler: Handler
     private var cacheCheckRunnable: Runnable? = null
 
-    // Système de triple-clic pour l'admin
+    // Système de quadruple-clic pour l'admin
     private var clickCount = 0
     private var lastClickTime = 0L
-    private val QUADRUPLE_CLICK_TIMEOUT = 1000L // 1 seconde pour faire 4 clics
+    private val QUADRUPLE_CLICK_TIMEOUT = 1000L
+
+    // Handler pour la reconnexion automatique
+    private lateinit var networkHandler: Handler
+    private var networkCheckRunnable: Runnable? = null
+    private var lastLoadTime = 0L
+    private var isPageLoaded = false
+
+    // Gestionnaire de connexion réseau
+    private lateinit var connectivityManager: ConnectivityManager
+    private lateinit var networkReceiver: BroadcastReceiver
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -99,6 +112,9 @@ class MainActivity : AppCompatActivity() {
         setupReceivers()
         checkWakeTimeRange()
 
+        // Démarrer la surveillance réseau
+        startNetworkMonitoring()
+
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
@@ -110,7 +126,6 @@ class MainActivity : AppCompatActivity() {
         if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
             Log.d("MainActivity", "Device Owner détecté - Initialisation ADB monitoring")
 
-            // Accorder la permission via Device Owner
             try {
                 devicePolicyManager.setPermissionGrantState(
                     adminComponent,
@@ -130,10 +145,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }, 2000)
 
-            // Activer ADB
             enableAndMaintainAdb()
 
-            // Démarrer le service
             val serviceIntent = Intent(this, AdbMonitorService::class.java)
             startForegroundService(serviceIntent)
             Log.d("MainActivity", "Service ADB Monitor démarré")
@@ -145,17 +158,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun enableAndMaintainAdb() {
         try {
-            // ADB général
             Settings.Global.putInt(contentResolver, Settings.Global.ADB_ENABLED, 1)
 
-            // ADB WiFi spécifique
             try {
                 Settings.Global.putInt(contentResolver, "adb_wifi_enabled", 1)
             } catch (e: Exception) {
                 Log.w("MainActivity", "Impossible d'activer adb_wifi_enabled", e)
             }
 
-            // Port TCP fixe
             try {
                 Runtime.getRuntime().exec("setprop service.adb.tcp.port 5555")
                 Runtime.getRuntime().exec("setprop service.adb.tcp.enable 1")
@@ -173,20 +183,19 @@ class MainActivity : AppCompatActivity() {
         adminComponent = ComponentName(this, KioskDeviceAdminReceiver::class.java)
         powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
-        // Initialiser le handler pour la vérification du cache
         cacheCheckHandler = Handler(Looper.getMainLooper())
+        networkHandler = Handler(Looper.getMainLooper())
 
         webView = findViewById(R.id.webView)
         configButton = findViewById(R.id.configButton)
 
-        // Wake lock PARTIAL pour maintenir le processus actif
         wakeLock = powerManager.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "KioskApp:PartialWakeLock"
         )
 
-        // Wake lock COMPLET pour maintenir l'écran allumé
         fullWakeLock = powerManager.newWakeLock(
             PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
             "KioskApp:FullWakeLock"
@@ -196,24 +205,20 @@ class MainActivity : AppCompatActivity() {
             handleAdminButtonClick()
         }
 
-        // Initialiser le style du bouton
         updateButtonStyle()
     }
 
     private fun applyProvisioningParameters() {
         try {
-            // Lire les paramètres du provisioning bundle
             val adminExtras = intent.getBundleExtra(DevicePolicyManager.EXTRA_PROVISIONING_ADMIN_EXTRAS_BUNDLE)
 
             if (adminExtras != null) {
-                // Configuration navigation
                 val navigationMode = adminExtras.getString("navigation_mode", "")
                 if (navigationMode == "gesture") {
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                        Settings.Secure.putInt(contentResolver, "navigation_mode", 2) // 2 = gestes
+                        Settings.Secure.putInt(contentResolver, "navigation_mode", 2)
                     }
                 }
-                // Configuration timeout écran
                 val screenTimeout = adminExtras.getInt("screen_timeout", -1)
                 if (screenTimeout > 0) {
                     Settings.System.putInt(contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, screenTimeout)
@@ -226,11 +231,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadSavedSettings() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-
-        // Charger l'URL sauvegardée (ou garder la valeur par défaut)
         currentUrl = prefs.getString(KEY_URL, currentUrl) ?: currentUrl
-
-        // Charger les horaires sauvegardés (ou garder les valeurs par défaut)
         wakeStartHour = prefs.getInt(KEY_WAKE_START_HOUR, wakeStartHour)
         wakeStartMinute = prefs.getInt(KEY_WAKE_START_MINUTE, wakeStartMinute)
         wakeEndHour = prefs.getInt(KEY_WAKE_END_HOUR, wakeEndHour)
@@ -240,22 +241,15 @@ class MainActivity : AppCompatActivity() {
     private fun saveSettings() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val editor = prefs.edit()
-
-        // Sauvegarder l'URL
         editor.putString(KEY_URL, currentUrl)
-
-        // Sauvegarder les horaires
         editor.putInt(KEY_WAKE_START_HOUR, wakeStartHour)
         editor.putInt(KEY_WAKE_START_MINUTE, wakeStartMinute)
         editor.putInt(KEY_WAKE_END_HOUR, wakeEndHour)
         editor.putInt(KEY_WAKE_END_MINUTE, wakeEndMinute)
-
-        // Appliquer les changements
         editor.apply()
     }
 
     private fun handleAdminButtonClick() {
-        // Si une boîte de dialogue est déjà affichée, ne rien faire
         if (isDialogShowing) {
             return
         }
@@ -263,9 +257,7 @@ class MainActivity : AppCompatActivity() {
         val currentTime = System.currentTimeMillis()
 
         if (isKioskMode) {
-            // En mode kiosk : nécessite un triple-clic rapide
             if (currentTime - lastClickTime > QUADRUPLE_CLICK_TIMEOUT) {
-                // Reset si trop de temps écoulé
                 clickCount = 1
             } else {
                 clickCount++
@@ -273,24 +265,11 @@ class MainActivity : AppCompatActivity() {
 
             lastClickTime = currentTime
 
-            when (clickCount) {
-                1 -> {
-                    // Premier clic - pas de feedback visible pour rester discret
-                }
-                2 -> {
-                    // Deuxième clic
-                }
-                3 -> {
-                    // Triple-clic
-                }
-                4 -> {
-                    //  la boîte de dialogue
-                    clickCount = 0
-                    showPasswordDialog()
-                }
+            if (clickCount >= 4) {
+                clickCount = 0
+                showPasswordDialog()
             }
 
-            // Reset automatique après timeout
             Handler(Looper.getMainLooper()).postDelayed({
                 if (System.currentTimeMillis() - lastClickTime >= QUADRUPLE_CLICK_TIMEOUT) {
                     clickCount = 0
@@ -298,31 +277,25 @@ class MainActivity : AppCompatActivity() {
             }, QUADRUPLE_CLICK_TIMEOUT)
 
         } else {
-            // Mode normal : ouverture directe
             showConfigDialog()
         }
     }
 
     private fun updateButtonStyle() {
         if (isKioskMode) {
-            // Mode kiosk : bouton quasi invisible
             configButton.text = "ADMIN"
-            configButton.alpha = 0.0f // Légèrement plus visible pour voir le texte
-            configButton.textSize = 10f // Taille légèrement plus grande
+            configButton.alpha = 0.0f
+            configButton.textSize = 10f
 
-            // Couleur très discrète
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                 configButton.backgroundTintList = resources.getColorStateList(android.R.color.transparent, null)
             } else {
                 configButton.setBackgroundColor(resources.getColor(android.R.color.transparent))
             }
             configButton.setTextColor(resources.getColor(android.R.color.darker_gray))
-
-            // Ajuster le padding pour un meilleur affichage du texte
             configButton.setPadding(8, 4, 8, 4)
 
         } else {
-            // Mode normal : bouton bien visible
             configButton.text = "CONFIG"
             configButton.alpha = 1.0f
             configButton.textSize = 12f
@@ -333,24 +306,67 @@ class MainActivity : AppCompatActivity() {
                 configButton.setBackgroundColor(resources.getColor(android.R.color.holo_blue_bright))
             }
             configButton.setTextColor(resources.getColor(android.R.color.white))
-
-            // Padding normal
             configButton.setPadding(16, 8, 16, 8)
         }
     }
 
     private fun setupWebView() {
         webView.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 return false
             }
 
-            override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                super.onPageFinished(view, url)
+                isPageLoaded = true
+                lastLoadTime = System.currentTimeMillis()
+                Log.d("MainActivity", "Page chargée: $url")
+            }
+
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: WebResourceError?
+            ) {
+                super.onReceivedError(view, request, error)
+
+                Log.e("MainActivity", "Erreur WebView: ${error?.description}")
+                isPageLoaded = false
+
+                // Si c'est une erreur réseau, essayer de recharger après un délai
+                if (error?.errorCode == ERROR_HOST_LOOKUP ||
+                    error?.errorCode == ERROR_CONNECT ||
+                    error?.errorCode == ERROR_TIMEOUT ||
+                    error?.errorCode == ERROR_UNKNOWN) {
+
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        if (!isPageLoaded && isNetworkAvailable()) {
+                            Log.d("MainActivity", "Tentative de rechargement après erreur")
+                            webView.reload()
+                        }
+                    }, 3000)
+                }
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun onReceivedError(
+                view: WebView?,
+                errorCode: Int,
+                description: String?,
+                failingUrl: String?
+            ) {
                 super.onReceivedError(view, errorCode, description, failingUrl)
-                // En cas d'erreur, essayer de recharger avec cache
-                if (errorCode == ERROR_UNKNOWN || description?.contains("CACHE_MISS") == true) {
-                    view?.settings?.cacheMode = WebSettings.LOAD_DEFAULT
-                    view?.reload()
+                isPageLoaded = false
+
+                if (errorCode == ERROR_HOST_LOOKUP ||
+                    errorCode == ERROR_CONNECT ||
+                    errorCode == ERROR_TIMEOUT) {
+
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        if (!isPageLoaded && isNetworkAvailable()) {
+                            webView.reload()
+                        }
+                    }, 3000)
                 }
             }
         }
@@ -359,25 +375,85 @@ class MainActivity : AppCompatActivity() {
         webSettings.javaScriptEnabled = true
         webSettings.domStorageEnabled = true
         webSettings.databaseEnabled = true
-
-        // Configuration moderne du cache
         webSettings.cacheMode = WebSettings.LOAD_DEFAULT
-
         webSettings.setSupportZoom(true)
         webSettings.builtInZoomControls = true
         webSettings.displayZoomControls = false
-
-        // Permettre le contenu mixte
         webSettings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-
-        // Activer les fonctionnalités web modernes
         webSettings.useWideViewPort = true
         webSettings.loadWithOverviewMode = true
 
-        // Vérifier si le cache doit être vidé quotidiennement
-        checkDailyCacheClear()
+        // Amélioration pour la gestion hors ligne
+        webSettings.allowFileAccess = true
+        webSettings.allowContentAccess = true
 
-        loadUrl(currentUrl)
+        checkDailyCacheClear()
+        loadUrl(currentUrl) // Pas de clearCache ici, juste charger l'URL
+    }
+
+    private fun isNetworkAvailable(): Boolean {
+        return try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                val network = connectivityManager.activeNetwork ?: return false
+                val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            } else {
+                @Suppress("DEPRECATION")
+                val networkInfo = connectivityManager.activeNetworkInfo
+                networkInfo != null && networkInfo.isConnected
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun startNetworkMonitoring() {
+        // Vérification périodique de la connectivité
+        networkCheckRunnable = object : Runnable {
+            override fun run() {
+                checkNetworkAndReload()
+                networkHandler.postDelayed(this, 30000) // Vérifier toutes les 30 secondes
+            }
+        }
+        networkHandler.postDelayed(networkCheckRunnable!!, 30000)
+
+        // Écouter les changements de réseau
+        networkReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (isNetworkAvailable() && !isPageLoaded) {
+                    Log.d("MainActivity", "Réseau disponible - rechargement")
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        webView.reload()
+                    }, 1000)
+                }
+            }
+        }
+
+        val filter = IntentFilter()
+        filter.addAction(ConnectivityManager.CONNECTIVITY_ACTION)
+        registerReceiver(networkReceiver, filter)
+    }
+
+    private fun checkNetworkAndReload() {
+        if (!isPageLoaded || (System.currentTimeMillis() - lastLoadTime > 60000)) {
+            if (isNetworkAvailable()) {
+                runOnUiThread {
+                    Log.d("MainActivity", "Vérification réseau - rechargement si nécessaire")
+                    webView.reload()
+                }
+            }
+        }
+    }
+
+    private fun stopNetworkMonitoring() {
+        networkCheckRunnable?.let {
+            networkHandler.removeCallbacks(it)
+        }
+        try {
+            unregisterReceiver(networkReceiver)
+        } catch (e: Exception) {
+            // Ignorer si déjà désenregistré
+        }
     }
 
     private fun checkDailyCacheClear() {
@@ -386,10 +462,7 @@ class MainActivity : AppCompatActivity() {
         val lastClearDate = prefs.getString(KEY_LAST_CACHE_CLEAR, "")
 
         if (lastClearDate != today) {
-            // Nouveau jour = vider le cache
             clearDailyCache()
-
-            // Sauvegarder la date du jour
             prefs.edit().putString(KEY_LAST_CACHE_CLEAR, today).apply()
         }
     }
@@ -403,12 +476,9 @@ class MainActivity : AppCompatActivity() {
         try {
             // Vider le cache WebView
             webView.clearCache(true)
-
-            // Vider aussi les données stockées localement
             webView.clearFormData()
             webView.clearHistory()
 
-            // Pour Android 21+, vider aussi le stockage Web
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                 android.webkit.CookieManager.getInstance().removeAllCookies(null)
                 android.webkit.WebStorage.getInstance().deleteAllData()
@@ -416,22 +486,20 @@ class MainActivity : AppCompatActivity() {
 
             // IMPORTANT: Recharger la page après vidage du cache
             webView.reload()
+            Log.d("MainActivity", "Cache quotidien vidé")
 
         } catch (e: Exception) {
-            // Log l'erreur si nécessaire
+            Log.e("MainActivity", "Erreur lors du vidage du cache", e)
         }
     }
 
-    // Démarrer la vérification périodique du cache
     private fun startPeriodicCacheCheck() {
         cacheCheckRunnable = object : Runnable {
             override fun run() {
                 checkDailyCacheClear()
-                // Revérifier toutes les heures
-                cacheCheckHandler.postDelayed(this, 60 * 60 * 1000L) // 1 heure
+                cacheCheckHandler.postDelayed(this, 60 * 60 * 1000L)
             }
         }
-        // Première vérification dans 1 heure
         cacheCheckHandler.postDelayed(cacheCheckRunnable!!, 60 * 60 * 1000L)
     }
 
@@ -448,19 +516,16 @@ class MainActivity : AppCompatActivity() {
                 when (intent?.action) {
                     Intent.ACTION_SCREEN_OFF -> {
                         if (isInWakeTimeRange && isKioskMode) {
-                            // L'écran s'est éteint pendant la plage horaire - réveil immédiat
                             scheduleImmediateWakeup()
                         }
                     }
                     Intent.ACTION_SCREEN_ON -> {
-                        // Écran rallumé - maintenir allumé si dans la plage
                         cancelAutoWakeup()
                         if (isInWakeTimeRange && isKioskMode) {
                             enforceScreenAlwaysOn()
                         }
                     }
                     Intent.ACTION_USER_PRESENT -> {
-                        // Déverrouillage utilisateur
                         if (isInWakeTimeRange && isKioskMode) {
                             enforceScreenAlwaysOn()
                         }
@@ -472,7 +537,6 @@ class MainActivity : AppCompatActivity() {
         timeReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 checkWakeTimeRange()
-                // Vérifier aussi le cache quotidiennement à chaque minute
                 checkDailyCacheClear()
             }
         }
@@ -490,27 +554,23 @@ class MainActivity : AppCompatActivity() {
         registerReceiver(screenReceiver, screenFilter)
         registerReceiver(timeReceiver, timeFilter)
 
-        // Démarrer la vérification périodique du cache
         startPeriodicCacheCheck()
     }
 
     private fun enforceScreenAlwaysOn() {
         try {
             runOnUiThread {
-                // Flags de fenêtre pour maintenir l'écran
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
                 window.addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
                 window.addFlags(WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD)
 
-                // Empêcher la mise en veille automatique
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
                     setShowWhenLocked(true)
                     setTurnScreenOn(true)
                 }
             }
 
-            // Acquérir les wake locks si pas encore fait
             if (!wakeLock.isHeld) {
                 wakeLock.acquire()
             }
@@ -520,7 +580,7 @@ class MainActivity : AppCompatActivity() {
             }
 
         } catch (e: Exception) {
-            // Log l'erreur si nécessaire
+            Log.e("MainActivity", "Erreur enforceScreenAlwaysOn", e)
         }
     }
 
@@ -534,31 +594,26 @@ class MainActivity : AppCompatActivity() {
         autoWakeRunnable = Runnable {
             forceWakeUpScreen()
 
-            // Vérifier si l'écran est bien allumé après 1 seconde
             Handler(Looper.getMainLooper()).postDelayed({
                 if (!powerManager.isInteractive && isInWakeTimeRange && isKioskMode) {
-                    // Si l'écran n'est toujours pas allumé, essayer encore
                     forceWakeUpScreen()
                 }
             }, 1000)
         }
 
-        // Réveil IMMÉDIAT (500ms seulement)
         autoWakeHandler?.postDelayed(autoWakeRunnable!!, 500)
     }
 
     private fun forceWakeUpScreen() {
         try {
-            // Créer plusieurs wake locks très puissants
             val emergencyWakeLock = powerManager.newWakeLock(
                 PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
                         PowerManager.ACQUIRE_CAUSES_WAKEUP or
                         PowerManager.ON_AFTER_RELEASE,
                 "KioskApp:EmergencyWakeUp"
             )
-            emergencyWakeLock.acquire(15000) // 15 secondes
+            emergencyWakeLock.acquire(15000)
 
-            // Wake lock additionnel pour forcer le réveil
             val fullScreenWakeLock = powerManager.newWakeLock(
                 PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
                 "KioskApp:FullScreenWake"
@@ -566,20 +621,17 @@ class MainActivity : AppCompatActivity() {
             fullScreenWakeLock.acquire(15000)
 
             runOnUiThread {
-                // Flags de fenêtre agressifs
                 window.addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
                 window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
                 window.addFlags(WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD)
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 window.addFlags(WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON)
 
-                // Pour Android récents
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
                     setShowWhenLocked(true)
                     setTurnScreenOn(true)
                 }
 
-                // Forcer l'activité visible
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                     try {
                         val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
@@ -590,7 +642,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // Essayer de déclencher une Intent pour réveiller
             try {
                 val wakeIntent = Intent(Intent.ACTION_SCREEN_ON)
                 sendBroadcast(wakeIntent)
@@ -598,16 +649,13 @@ class MainActivity : AppCompatActivity() {
                 // Ignore
             }
 
-            // Programmer un réveil récursif si ça ne marche pas
             Handler(Looper.getMainLooper()).postDelayed({
                 if (!powerManager.isInteractive && isInWakeTimeRange && isKioskMode) {
-                    // Encore en veille, essayer une autre méthode
                     tryAlternativeWakeup()
                 }
             }, 2000)
 
         } catch (e: Exception) {
-            // En cas d'échec, reprogrammer
             if (isInWakeTimeRange && isKioskMode) {
                 Handler(Looper.getMainLooper()).postDelayed({
                     scheduleImmediateWakeup()
@@ -618,7 +666,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun tryAlternativeWakeup() {
         try {
-            // Méthode alternative avec PendingIntent
             val intent = Intent(this, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
@@ -630,7 +677,6 @@ class MainActivity : AppCompatActivity() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            // Utiliser AlarmManager pour forcer le réveil
             alarmManager.setExactAndAllowWhileIdle(
                 AlarmManager.RTC_WAKEUP,
                 System.currentTimeMillis() + 500,
@@ -638,7 +684,6 @@ class MainActivity : AppCompatActivity() {
             )
 
         } catch (e: Exception) {
-            // Dernière tentative dans 3 secondes
             Handler(Looper.getMainLooper()).postDelayed({
                 if (!powerManager.isInteractive && isInWakeTimeRange && isKioskMode) {
                     forceWakeUpScreen()
@@ -658,7 +703,6 @@ class MainActivity : AppCompatActivity() {
         try {
             enforceScreenAlwaysOn()
 
-            // Programmer un vérificateur périodique
             val handler = Handler(Looper.getMainLooper())
             val checker = object : Runnable {
                 override fun run() {
@@ -666,7 +710,6 @@ class MainActivity : AppCompatActivity() {
                         if (!powerManager.isInteractive) {
                             forceWakeUpScreen()
                         }
-                        // Revérifier toutes les 30 secondes
                         handler.postDelayed(this, 30000)
                     }
                 }
@@ -687,30 +730,24 @@ class MainActivity : AppCompatActivity() {
         val errorText = dialogView.findViewById<TextView>(R.id.errorText)
         errorText.visibility = View.GONE
 
-
         val dialog = AlertDialog.Builder(this)
             .setView(dialogView)
             .setCancelable(false)
             .create()
 
         dialog.setCanceledOnTouchOutside(false)
-
-        // Forcer les coins arrondis
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
 
-        // Gérer les clics sur nos boutons personnalisés
         okButton.setOnClickListener {
             errorText.visibility = View.GONE
             if (passwordEdit.text.toString() == kioskPassword) {
                 dialog.dismiss()
                 showConfigDialog()
             } else {
-                // Afficher l'erreur avec le TextView
                 errorText.text = "Mot de passe incorrect"
                 errorText.visibility = View.VISIBLE
                 passwordEdit.selectAll()
 
-                // Animation de vibration
                 passwordEdit.animate().translationX(10f).setDuration(100).withEndAction {
                     passwordEdit.animate().translationX(-10f).setDuration(100).withEndAction {
                         passwordEdit.animate().translationX(0f).setDuration(100)
@@ -742,9 +779,8 @@ class MainActivity : AppCompatActivity() {
 
         urlEdit.setText(currentUrl)
 
-        // Vérifier la version Android pour TimePicker
-        startTimePicker.setIs24HourView(true) // Forcer format 24h
-        endTimePicker.setIs24HourView(true)   // Forcer format 24h
+        startTimePicker.setIs24HourView(true)
+        endTimePicker.setIs24HourView(true)
 
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
             startTimePicker.hour = wakeStartHour
@@ -762,14 +798,11 @@ class MainActivity : AppCompatActivity() {
             endTimePicker.currentMinute = wakeEndMinute
         }
 
-        // État local du toggle (ne modifie pas le vrai mode immédiatement)
         var pendingKioskMode = isKioskMode
 
-        // Fonction pour mettre à jour l'affichage du bouton
         fun updateToggleButton() {
             toggleKioskButton.text = if (pendingKioskMode) "DÉSACTIVER KIOSK" else "ACTIVER KIOSK"
 
-            // Changer la couleur du bouton
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                 toggleKioskButton.backgroundTintList = if (pendingKioskMode) {
                     resources.getColorStateList(android.R.color.holo_red_dark, null)
@@ -777,7 +810,6 @@ class MainActivity : AppCompatActivity() {
                     resources.getColorStateList(android.R.color.holo_orange_dark, null)
                 }
             } else {
-                // Fallback pour versions plus anciennes
                 toggleKioskButton.setBackgroundColor(if (pendingKioskMode) {
                     resources.getColor(android.R.color.holo_red_dark)
                 } else {
@@ -786,7 +818,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Initialiser l'affichage du bouton
         updateToggleButton()
 
         val dialog = AlertDialog.Builder(this)
@@ -795,18 +826,15 @@ class MainActivity : AppCompatActivity() {
             .create()
 
         dialog.setCanceledOnTouchOutside(false)
-
-        // Forcer les coins arrondis
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
 
-        // Gérer le bouton Appliquer
         applyButton.setOnClickListener {
-            // Récupérer la nouvelle URL
             val newUrl = urlEdit.text.toString()
-
-            // TOUJOURS vider le cache quand on applique
             currentUrl = newUrl
-            loadUrl(currentUrl)
+
+            // TOUJOURS vider le cache quand on applique (comportement original)
+            isPageLoaded = false
+            loadUrl(currentUrl, clearCache = true)
 
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
                 wakeStartHour = startTimePicker.hour
@@ -824,36 +852,34 @@ class MainActivity : AppCompatActivity() {
                 wakeEndMinute = endTimePicker.currentMinute
             }
 
-            // SAUVEGARDER LES NOUVEAUX PARAMÈTRES
             saveSettings()
-
             checkWakeTimeRange()
             scheduleWakeAlarms()
 
-            // Appliquer le changement de mode kiosk SEULEMENT maintenant
+            // Appliquer le changement de mode kiosk en dernier
             if (pendingKioskMode != isKioskMode) {
-                if (pendingKioskMode) {
-                    enterKioskMode()
-                } else {
-                    exitKioskMode()
-                }
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if (pendingKioskMode) {
+                        enterKioskMode()
+                    } else {
+                        exitKioskMode()
+                    }
+                }, 100)
             }
 
             dialog.dismiss()
         }
 
-        // Gérer le bouton Annuler
         cancelConfigButton.setOnClickListener {
             dialog.dismiss()
         }
 
-        // Le bouton toggle change seulement l'état local, sans fermer la popup
         toggleKioskButton.setOnClickListener {
             if (!devicePolicyManager.isDeviceOwnerApp(packageName)) {
+                Toast.makeText(this, "Device Owner requis", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            // Inverser l'état local seulement
             pendingKioskMode = !pendingKioskMode
             updateToggleButton()
         }
@@ -865,79 +891,87 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
-    private fun toggleKioskMode() {
-        if (!devicePolicyManager.isDeviceOwnerApp(packageName)) {
-            return
-        }
-
-        if (isKioskMode) {
-            exitKioskMode()
-        } else {
-            enterKioskMode()
-        }
-    }
-
     private fun enterKioskMode() {
         try {
-            // Configuration des packages autorisés en lock task
-            devicePolicyManager.setLockTaskPackages(adminComponent, arrayOf(packageName))
+            // S'assurer que l'activité est au premier plan
+            runOnUiThread {
+                devicePolicyManager.setLockTaskPackages(adminComponent, arrayOf(packageName))
+                hideSystemUI()
 
-            // Masquer l'interface système
-            hideSystemUI()
-
-            // Démarrer le lock task
-            startLockTask()
-
-            isKioskMode = true
-
-            // Mettre à jour le style du bouton pour le rendre quasi invisible
-            updateButtonStyle()
-
-            // Reset du compteur de clics
-            clickCount = 0
-            lastClickTime = 0L
-
-            // Vérifier si on doit maintenir l'écran allumé
-            checkWakeTimeRange()
+                // Démarrer le lock task avec un délai pour éviter les problèmes
+                Handler(Looper.getMainLooper()).postDelayed({
+                    try {
+                        startLockTask()
+                        isKioskMode = true
+                        updateButtonStyle()
+                        clickCount = 0
+                        lastClickTime = 0L
+                        checkWakeTimeRange()
+                        Log.d("MainActivity", "Mode kiosk activé avec succès")
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Erreur startLockTask", e)
+                        isKioskMode = false
+                        showSystemUI()
+                    }
+                }, 500)
+            }
 
         } catch (e: Exception) {
-            // Erreur lors de l'activation du mode kiosk
+            Log.e("MainActivity", "Erreur activation mode kiosk", e)
+            isKioskMode = false
         }
     }
 
     private fun exitKioskMode() {
         try {
-            // Arrêter le lock task
-            stopLockTask()
+            runOnUiThread {
+                // Stopper d'abord le lock task
+                if (isInLockTaskMode()) {
+                    stopLockTask()
+                }
 
-            // Réactiver l'interface système
-            showSystemUI()
+                // Attendre un peu avant de réinitialiser
+                Handler(Looper.getMainLooper()).postDelayed({
+                    showSystemUI()
+                    devicePolicyManager.setLockTaskPackages(adminComponent, arrayOf())
+                    isKioskMode = false
+                    updateButtonStyle()
+                    clickCount = 0
+                    lastClickTime = 0L
+                    cancelAutoWakeup()
 
-            // Vider la liste des packages autorisés
-            devicePolicyManager.setLockTaskPackages(adminComponent, arrayOf())
+                    // Libérer les wake locks
+                    try {
+                        if (wakeLock.isHeld) {
+                            wakeLock.release()
+                        }
+                        if (fullWakeLock.isHeld) {
+                            fullWakeLock.release()
+                        }
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Erreur release wake locks", e)
+                    }
 
-            isKioskMode = false
+                    // Retirer les flags de fenêtre
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
 
-            // Remettre le bouton visible
-            updateButtonStyle()
-
-            // Reset du compteur de clics
-            clickCount = 0
-            lastClickTime = 0L
-
-            // Annuler les réveils automatiques
-            cancelAutoWakeup()
-
-            // Libérer les wake locks si nécessaire
-            if (wakeLock.isHeld) {
-                wakeLock.release()
-            }
-            if (fullWakeLock.isHeld) {
-                fullWakeLock.release()
+                    Log.d("MainActivity", "Mode kiosk désactivé avec succès")
+                }, 300)
             }
 
         } catch (e: Exception) {
-            // Erreur lors de la désactivation du mode kiosk
+            Log.e("MainActivity", "Erreur désactivation mode kiosk", e)
+        }
+    }
+
+    private fun isInLockTaskMode(): Boolean {
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            activityManager.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE
+        } else {
+            false
         }
     }
 
@@ -969,17 +1003,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun loadUrl(url: String) {
-        webView.clearCache(true)
-        webView.clearHistory()
+    private fun loadUrl(url: String, clearCache: Boolean = false) {
+        // Ne vider le cache que si explicitement demandé
+        if (clearCache) {
+            webView.clearCache(true)
+            webView.clearHistory()
+        }
 
-        // Vérifier que l'URL a un protocole
         val finalUrl = if (!url.startsWith("http://") && !url.startsWith("https://")) {
             "https://$url"
         } else {
             url
         }
 
+        isPageLoaded = false
         webView.loadUrl(finalUrl)
     }
 
@@ -1001,18 +1038,15 @@ class MainActivity : AppCompatActivity() {
 
         if (isKioskMode) {
             if (isInWakeTimeRange) {
-                // DANS LA PLAGE - écran TOUJOURS allumé
                 enforceScreenAlwaysOn()
                 disableScreenSleep()
 
                 if (!wasInRange) {
-                    // Vient d'entrer dans la plage - réveil immédiat si nécessaire
                     if (!powerManager.isInteractive) {
                         forceWakeUpScreen()
                     }
                 }
             } else {
-                // HORS PLAGE - comportement normal
                 cancelAutoWakeup()
 
                 runOnUiThread {
@@ -1022,7 +1056,6 @@ class MainActivity : AppCompatActivity() {
                     window.clearFlags(WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD)
                 }
 
-                // Libérer les wake locks
                 if (wakeLock.isHeld) {
                     wakeLock.release()
                 }
@@ -1034,36 +1067,59 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun scheduleWakeAlarms() {
-        // Programmer des alarmes pour entrer/sortir de la plage horaire
         val startIntent = Intent(this, WakeUpReceiver::class.java)
         val endIntent = Intent(this, SleepReceiver::class.java)
 
-        val startPendingIntent = PendingIntent.getBroadcast(this, 0, startIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val endPendingIntent = PendingIntent.getBroadcast(this, 1, endIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val startPendingIntent = PendingIntent.getBroadcast(
+            this, 0, startIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val endPendingIntent = PendingIntent.getBroadcast(
+            this, 1, endIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
         val startCalendar = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, wakeStartHour)
             set(Calendar.MINUTE, wakeStartMinute)
             set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+
+            if (timeInMillis <= System.currentTimeMillis()) {
+                add(Calendar.DAY_OF_MONTH, 1)
+            }
         }
 
         val endCalendar = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, wakeEndHour)
             set(Calendar.MINUTE, wakeEndMinute)
             set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+
+            if (timeInMillis <= System.currentTimeMillis()) {
+                add(Calendar.DAY_OF_MONTH, 1)
+            }
         }
 
-        alarmManager.setRepeating(AlarmManager.RTC_WAKEUP, startCalendar.timeInMillis, AlarmManager.INTERVAL_DAY, startPendingIntent)
-        alarmManager.setRepeating(AlarmManager.RTC_WAKEUP, endCalendar.timeInMillis, AlarmManager.INTERVAL_DAY, endPendingIntent)
+        // Utiliser setExactAndAllowWhileIdle pour un réveil précis
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, startCalendar.timeInMillis, startPendingIntent)
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, endCalendar.timeInMillis, endPendingIntent)
+        } else {
+            alarmManager.setExact(AlarmManager.RTC_WAKEUP, startCalendar.timeInMillis, startPendingIntent)
+            alarmManager.setExact(AlarmManager.RTC_WAKEUP, endCalendar.timeInMillis, endPendingIntent)
+        }
+
+        Log.d("MainActivity", "Alarme de réveil programmée pour : ${startCalendar.time}")
+        Log.d("MainActivity", "Alarme de sommeil programmée pour : ${endCalendar.time}")
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (isKioskMode) {
-            // Bloquer toutes les touches en mode kiosk sauf volume
             return when (keyCode) {
                 KeyEvent.KEYCODE_VOLUME_UP,
                 KeyEvent.KEYCODE_VOLUME_DOWN -> super.onKeyDown(keyCode, event)
-                else -> true // Bloquer toutes les autres touches
+                else -> true
             }
         }
         return super.onKeyDown(keyCode, event)
@@ -1071,17 +1127,26 @@ class MainActivity : AppCompatActivity() {
 
     override fun onBackPressed() {
         if (isKioskMode) {
-            // En mode kiosk, ne pas permettre la sortie
             return
         }
         super.onBackPressed()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // Si l'activité est réveillée par le WakeUpReceiver
+        if (intent.getBooleanExtra("WAKE_UP_TRIGGER", false)) {
+            checkWakeTimeRange()
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         try {
             cancelAutoWakeup()
-            stopPeriodicCacheCheck() // Arrêter la vérification du cache
+            stopPeriodicCacheCheck()
+            stopNetworkMonitoring()
+
             unregisterReceiver(screenReceiver)
             unregisterReceiver(timeReceiver)
 
@@ -1095,7 +1160,7 @@ class MainActivity : AppCompatActivity() {
                 if (it.isHeld) it.release()
             }
         } catch (e: Exception) {
-            // Ignore
+            Log.e("MainActivity", "Erreur onDestroy", e)
         }
     }
 }
