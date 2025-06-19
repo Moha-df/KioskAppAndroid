@@ -11,6 +11,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.ConnectivityManager
+import android.net.wifi.WifiManager
 import android.net.NetworkCapabilities
 import android.os.Bundle
 import android.os.Handler
@@ -49,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var powerManager: PowerManager
     private lateinit var wakeLock: PowerManager.WakeLock
     private lateinit var fullWakeLock: PowerManager.WakeLock
+    private lateinit var wifiLock: WifiManager.WifiLock
     private lateinit var alarmManager: AlarmManager
 
     private var isKioskMode = false
@@ -200,6 +202,10 @@ class MainActivity : AppCompatActivity() {
             PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
             "KioskApp:FullWakeLock"
         )
+
+        // WiFi Lock pour maintenir la connexion active
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "KioskApp:WifiLock")
 
         configButton.setOnClickListener {
             handleAdminButtonClick()
@@ -441,7 +447,27 @@ class MainActivity : AppCompatActivity() {
                     Log.d("MainActivity", "Vérification réseau - rechargement si nécessaire")
                     webView.reload()
                 }
+            } else {
+                // Si pas de réseau, essayer de réactiver le WiFi
+                ensureWifiEnabled()
             }
+        }
+    }
+
+    private fun ensureWifiEnabled() {
+        try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            if (!wifiManager.isWifiEnabled) {
+                Log.d("MainActivity", "WiFi désactivé - tentative de réactivation")
+                // Note: setWifiEnabled est déprécié sur Android Q+
+                // mais fonctionne toujours en mode Device Owner
+                if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
+                    @Suppress("DEPRECATION")
+                    wifiManager.isWifiEnabled = true
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Erreur réactivation WiFi", e)
         }
     }
 
@@ -577,6 +603,12 @@ class MainActivity : AppCompatActivity() {
 
             if (!fullWakeLock.isHeld) {
                 fullWakeLock.acquire()
+            }
+
+            // Maintenir le WiFi actif pendant la plage horaire
+            if (!wifiLock.isHeld) {
+                wifiLock.acquire()
+                Log.d("MainActivity", "WiFi lock acquis")
             }
 
         } catch (e: Exception) {
@@ -948,6 +980,9 @@ class MainActivity : AppCompatActivity() {
                         if (fullWakeLock.isHeld) {
                             fullWakeLock.release()
                         }
+                        if (wifiLock.isHeld) {
+                            wifiLock.release()
+                        }
                     } catch (e: Exception) {
                         Log.e("MainActivity", "Erreur release wake locks", e)
                     }
@@ -1062,6 +1097,12 @@ class MainActivity : AppCompatActivity() {
                 if (fullWakeLock.isHeld) {
                     fullWakeLock.release()
                 }
+
+                // Libérer le WiFi lock hors plage horaire
+                if (wifiLock.isHeld) {
+                    wifiLock.release()
+                    Log.d("MainActivity", "WiFi lock libéré")
+                }
             }
         }
     }
@@ -1155,6 +1196,9 @@ class MainActivity : AppCompatActivity() {
             }
             if (fullWakeLock.isHeld) {
                 fullWakeLock.release()
+            }
+            if (wifiLock.isHeld) {
+                wifiLock.release()
             }
             screenWakeLock?.let {
                 if (it.isHeld) it.release()
