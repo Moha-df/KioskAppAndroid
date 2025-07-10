@@ -99,6 +99,8 @@ class MainActivity : AppCompatActivity() {
     private var isPageLoaded = false
     private var isReloadingInProgress = false
 
+    // Flag pour suivre si la dernière page a eu une erreur
+    private var lastPageHadError = false
 
     // Gestionnaire de connexion réseau
     private lateinit var connectivityManager: ConnectivityManager
@@ -324,15 +326,20 @@ class MainActivity : AppCompatActivity() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 super.onPageStarted(view, url, favicon)
                 isPageLoaded = false
+                lastPageHadError = false
                 Log.d("MainActivity", "isPageLoaded = false (onPageStarted) pour $url")
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                isPageLoaded = true
+                if (!lastPageHadError) {
+                    isPageLoaded = true
+                } else {
+                    isPageLoaded = false
+                }
                 isReloadingInProgress = false
                 lastLoadTime = System.currentTimeMillis()
-                Log.d("MainActivity", "isPageLoaded = true (onPageFinished) pour $url")
+                Log.d("MainActivity", "isPageLoaded = ${isPageLoaded} (onPageFinished) pour $url")
             }
 
             override fun onReceivedError(
@@ -343,6 +350,7 @@ class MainActivity : AppCompatActivity() {
                 super.onReceivedError(view, request, error)
                 isPageLoaded = false
                 isReloadingInProgress = false
+                lastPageHadError = true
                 Log.d("MainActivity", "isPageLoaded = false (onReceivedError) pour ${request?.url}")
 
                 Log.e("MainActivity", "Erreur WebView: ${error?.description}")
@@ -372,6 +380,7 @@ class MainActivity : AppCompatActivity() {
                 super.onReceivedError(view, errorCode, description, failingUrl)
                 isPageLoaded = false
                 isReloadingInProgress = false
+                lastPageHadError = true
                 Log.d("MainActivity", "isPageLoaded = false (onReceivedError deprecated) pour $failingUrl")
 
                 if (errorCode == ERROR_HOST_LOOKUP ||
@@ -475,14 +484,20 @@ class MainActivity : AppCompatActivity() {
     private fun ensureWifiEnabled() {
         try {
             val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            Log.d("MainActivity", "ensureWifiEnabled() appelé. isWifiEnabled=${wifiManager.isWifiEnabled}")
             if (!wifiManager.isWifiEnabled) {
                 Log.d("MainActivity", "WiFi désactivé - tentative de réactivation")
-                // Note: setWifiEnabled est déprécié sur Android Q+
-                // mais fonctionne toujours en mode Device Owner
-                if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
+                val isDeviceOwner = devicePolicyManager.isDeviceOwnerApp(packageName)
+                Log.d("MainActivity", "isDeviceOwner=$isDeviceOwner")
+                if (isDeviceOwner) {
                     @Suppress("DEPRECATION")
                     wifiManager.isWifiEnabled = true
+                    Log.d("MainActivity", "wifiManager.isWifiEnabled = true exécuté")
+                } else {
+                    Log.d("MainActivity", "App n'est pas Device Owner, impossible de réactiver le WiFi")
                 }
+            } else {
+                Log.d("MainActivity", "WiFi déjà activé, aucune action nécessaire")
             }
         } catch (e: Exception) {
             Log.e("MainActivity", "Erreur réactivation WiFi", e)

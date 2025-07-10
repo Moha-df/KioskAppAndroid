@@ -135,10 +135,39 @@ class AdbMonitorService : Service() {
                 }
             }
 
+            // Ajout : tenter de réactiver le WiFi si besoin
+            ensureWifiEnabled()
+
         } catch (e: SecurityException) {
             Log.e(TAG, "Erreur de permission lors de la vérification ADB", e)
         } catch (e: Exception) {
             Log.e(TAG, "Erreur lors de la vérification ADB", e)
+        }
+    }
+
+    // Ajout : fonction pour réactiver le WiFi si besoin
+    private fun ensureWifiEnabled() {
+        try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            Log.d(TAG, "ensureWifiEnabled() appelé. isWifiEnabled=${wifiManager.isWifiEnabled}")
+            if (!wifiManager.isWifiEnabled) {
+                Log.d(TAG, "WiFi désactivé - tentative de réactivation (service)")
+                val devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                val componentName = ComponentName(this, KioskDeviceAdminReceiver::class.java)
+                val isDeviceOwner = devicePolicyManager.isDeviceOwnerApp(packageName)
+                Log.d(TAG, "isDeviceOwner=$isDeviceOwner")
+                if (isDeviceOwner) {
+                    @Suppress("DEPRECATION")
+                    wifiManager.isWifiEnabled = true
+                    Log.d(TAG, "wifiManager.isWifiEnabled = true exécuté (service)")
+                } else {
+                    Log.d(TAG, "App n'est pas Device Owner, impossible de réactiver le WiFi (service)")
+                }
+            } else {
+                Log.d(TAG, "WiFi déjà activé, aucune action nécessaire (service)")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Erreur réactivation WiFi", e)
         }
     }
 
