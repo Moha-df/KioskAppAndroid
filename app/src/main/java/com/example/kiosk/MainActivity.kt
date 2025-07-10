@@ -40,6 +40,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import java.util.*
 import android.util.Log
+import android.graphics.Bitmap
 
 class MainActivity : AppCompatActivity() {
 
@@ -96,6 +97,8 @@ class MainActivity : AppCompatActivity() {
     private var networkCheckRunnable: Runnable? = null
     private var lastLoadTime = 0L
     private var isPageLoaded = false
+    private var isReloadingInProgress = false
+
 
     // Gestionnaire de connexion réseau
     private lateinit var connectivityManager: ConnectivityManager
@@ -318,15 +321,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupWebView() {
         webView.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                return false
+            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                super.onPageStarted(view, url, favicon)
+                isPageLoaded = false
+                Log.d("MainActivity", "isPageLoaded = false (onPageStarted) pour $url")
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 isPageLoaded = true
+                isReloadingInProgress = false
                 lastLoadTime = System.currentTimeMillis()
-                Log.d("MainActivity", "Page chargée: $url")
+                Log.d("MainActivity", "isPageLoaded = true (onPageFinished) pour $url")
             }
 
             override fun onReceivedError(
@@ -335,9 +341,11 @@ class MainActivity : AppCompatActivity() {
                 error: WebResourceError?
             ) {
                 super.onReceivedError(view, request, error)
+                isPageLoaded = false
+                isReloadingInProgress = false
+                Log.d("MainActivity", "isPageLoaded = false (onReceivedError) pour ${request?.url}")
 
                 Log.e("MainActivity", "Erreur WebView: ${error?.description}")
-                isPageLoaded = false
 
                 // Si c'est une erreur réseau, essayer de recharger après un délai
                 if (error?.errorCode == ERROR_HOST_LOOKUP ||
@@ -363,6 +371,8 @@ class MainActivity : AppCompatActivity() {
             ) {
                 super.onReceivedError(view, errorCode, description, failingUrl)
                 isPageLoaded = false
+                isReloadingInProgress = false
+                Log.d("MainActivity", "isPageLoaded = false (onReceivedError deprecated) pour $failingUrl")
 
                 if (errorCode == ERROR_HOST_LOOKUP ||
                     errorCode == ERROR_CONNECT ||
@@ -441,14 +451,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkNetworkAndReload() {
-        if (!isPageLoaded || (System.currentTimeMillis() - lastLoadTime > 60000)) {
+        // Éviter les rechargements multiples
+        if (isReloadingInProgress) {
+            return
+        }
+
+        val timeSinceLastLoad = System.currentTimeMillis() - lastLoadTime
+
+        Log.d("MainActivity", "Avant IF: isPageLoaded=$isPageLoaded, timeSinceLastLoad=$timeSinceLastLoad")
+        if (!isPageLoaded && timeSinceLastLoad > 300000) {
             if (isNetworkAvailable()) {
+                isReloadingInProgress = true
                 runOnUiThread {
                     Log.d("MainActivity", "Vérification réseau - rechargement si nécessaire")
                     webView.reload()
                 }
             } else {
-                // Si pas de réseau, essayer de réactiver le WiFi
                 ensureWifiEnabled()
             }
         }
@@ -865,7 +883,6 @@ class MainActivity : AppCompatActivity() {
             currentUrl = newUrl
 
             // TOUJOURS vider le cache quand on applique (comportement original)
-            isPageLoaded = false
             loadUrl(currentUrl, clearCache = true)
 
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
@@ -1052,6 +1069,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         isPageLoaded = false
+        Log.d("MainActivity", "isPageLoaded = false (loadUrl) pour $finalUrl")
         webView.loadUrl(finalUrl)
     }
 
