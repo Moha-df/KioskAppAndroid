@@ -109,6 +109,10 @@
                 android:value="ADB monitoring and maintenance" />
         </service>
 
+        <uses-library
+            android:name="org.chromium.webview"
+            android:required="false" />
+
     </application>
 
 </manifest>
