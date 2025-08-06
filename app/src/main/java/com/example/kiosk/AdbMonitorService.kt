@@ -18,11 +18,16 @@ class AdbMonitorService : Service() {
         private const val TAG = "AdbMonitorService"
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "adb_monitor_channel"
-        private const val CHECK_INTERVAL = 30000L // 30 secondes
+        private const val CHECK_INTERVAL = 60000L // 60 secondes (au lieu de 30)
     }
 
     private val handler = Handler(Looper.getMainLooper())
     private var isRunning = false
+
+    // Variables pour suivre l'état précédent et éviter les logs répétitifs
+    private var lastAdbEnabled = -1
+    private var lastAdbWifiEnabled = -1
+    private var lastWifiEnabled: Boolean? = null
 
     private val checkAdbRunnable = object : Runnable {
         override fun run() {
@@ -71,7 +76,12 @@ class AdbMonitorService : Service() {
                 Settings.Global.getInt(contentResolver, "adb_wifi_enabled", 0)
             } catch (e: Exception) { 0 }
 
-            Log.d(TAG, "État ADB: général=$adbEnabled, wifi=$adbWifiEnabled")
+            // Log conditionnel : seulement si l'état a changé
+            if (adbEnabled != lastAdbEnabled || adbWifiEnabled != lastAdbWifiEnabled) {
+                Log.d(TAG, "État ADB changé: général=$adbEnabled, wifi=$adbWifiEnabled")
+                lastAdbEnabled = adbEnabled
+                lastAdbWifiEnabled = adbWifiEnabled
+            }
 
             // Si ADB général désactivé, essayer de le réactiver avec DevicePolicyManager
             if (adbEnabled == 0) {
@@ -149,8 +159,15 @@ class AdbMonitorService : Service() {
     private fun ensureWifiEnabled() {
         try {
             val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
-            Log.d(TAG, "ensureWifiEnabled() appelé. isWifiEnabled=${wifiManager.isWifiEnabled}")
-            if (!wifiManager.isWifiEnabled) {
+            val currentWifiEnabled = wifiManager.isWifiEnabled
+            
+            // Log conditionnel : seulement si l'état WiFi a changé
+            if (currentWifiEnabled != lastWifiEnabled) {
+                Log.d(TAG, "État WiFi changé: $currentWifiEnabled")
+                lastWifiEnabled = currentWifiEnabled
+            }
+            
+            if (!currentWifiEnabled) {
                 Log.d(TAG, "WiFi désactivé - tentative de réactivation (service)")
                 val devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
                 val componentName = ComponentName(this, KioskDeviceAdminReceiver::class.java)
@@ -163,9 +180,8 @@ class AdbMonitorService : Service() {
                 } else {
                     Log.d(TAG, "App n'est pas Device Owner, impossible de réactiver le WiFi (service)")
                 }
-            } else {
-                Log.d(TAG, "WiFi déjà activé, aucune action nécessaire (service)")
             }
+            // Suppression du log "WiFi déjà activé" pour réduire le spam
         } catch (e: Exception) {
             Log.e(TAG, "Erreur réactivation WiFi", e)
         }

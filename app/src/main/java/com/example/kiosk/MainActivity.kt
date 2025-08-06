@@ -1006,14 +1006,26 @@ class MainActivity : AppCompatActivity() {
 
                     // Libérer les wake locks
                     try {
-                        if (wakeLock.isHeld) {
-                            wakeLock.release()
+                        if (::wakeLock.isInitialized && wakeLock.isHeld) {
+                            try {
+                                wakeLock.release()
+                            } catch (e: Exception) {
+                                Log.e("MainActivity", "Erreur release wakeLock", e)
+                            }
                         }
-                        if (fullWakeLock.isHeld) {
-                            fullWakeLock.release()
+                        if (::fullWakeLock.isInitialized && fullWakeLock.isHeld) {
+                            try {
+                                fullWakeLock.release()
+                            } catch (e: Exception) {
+                                Log.e("MainActivity", "Erreur release fullWakeLock", e)
+                            }
                         }
-                        if (wifiLock.isHeld) {
-                            wifiLock.release()
+                        if (::wifiLock.isInitialized && wifiLock.isHeld) {
+                            try {
+                                wifiLock.release()
+                            } catch (e: Exception) {
+                                Log.e("MainActivity", "Erreur release wifiLock", e)
+                            }
                         }
                     } catch (e: Exception) {
                         Log.e("MainActivity", "Erreur release wake locks", e)
@@ -1124,17 +1136,29 @@ class MainActivity : AppCompatActivity() {
                     window.clearFlags(WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD)
                 }
 
-                if (wakeLock.isHeld) {
-                    wakeLock.release()
+                if (::wakeLock.isInitialized && wakeLock.isHeld) {
+                    try {
+                        wakeLock.release()
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Erreur release wakeLock", e)
+                    }
                 }
-                if (fullWakeLock.isHeld) {
-                    fullWakeLock.release()
+                if (::fullWakeLock.isInitialized && fullWakeLock.isHeld) {
+                    try {
+                        fullWakeLock.release()
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Erreur release fullWakeLock", e)
+                    }
                 }
 
                 // Libérer le WiFi lock hors plage horaire
-                if (wifiLock.isHeld) {
-                    wifiLock.release()
-                    Log.d("MainActivity", "WiFi lock libéré")
+                if (::wifiLock.isInitialized && wifiLock.isHeld) {
+                    try {
+                        wifiLock.release()
+                        Log.d("MainActivity", "WiFi lock libéré")
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Erreur release wifiLock", e)
+                    }
                 }
             }
         }
@@ -1224,17 +1248,36 @@ class MainActivity : AppCompatActivity() {
             unregisterReceiver(screenReceiver)
             unregisterReceiver(timeReceiver)
 
-            if (wakeLock.isHeld) {
-                wakeLock.release()
+            if (::wakeLock.isInitialized && wakeLock.isHeld) {
+                try {
+                    wakeLock.release()
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Erreur release wakeLock", e)
+                }
             }
-            if (fullWakeLock.isHeld) {
-                fullWakeLock.release()
+            if (::fullWakeLock.isInitialized && fullWakeLock.isHeld) {
+                try {
+                    fullWakeLock.release()
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Erreur release fullWakeLock", e)
+                }
             }
-            if (wifiLock.isHeld) {
-                wifiLock.release()
+            if (::wifiLock.isInitialized && wifiLock.isHeld) {
+                try {
+                    wifiLock.release()
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Erreur release wifiLock", e)
+                }
             }
             screenWakeLock?.let {
                 if (it.isHeld) it.release()
+            }
+            try {
+                if (::webView.isInitialized) {
+                    webView.destroy()
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Erreur destruction WebView", e)
             }
         } catch (e: Exception) {
             Log.e("MainActivity", "Erreur onDestroy", e)
