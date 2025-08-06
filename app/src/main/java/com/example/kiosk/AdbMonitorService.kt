@@ -18,7 +18,7 @@ class AdbMonitorService : Service() {
         private const val TAG = "AdbMonitorService"
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "adb_monitor_channel"
-        private const val CHECK_INTERVAL = 60000L // 60 secondes (au lieu de 30)
+        private const val CHECK_INTERVAL = 300000L // 5 minutes
     }
 
     private val handler = Handler(Looper.getMainLooper())
