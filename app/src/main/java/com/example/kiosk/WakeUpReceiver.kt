@@ -19,32 +19,58 @@ class WakeUpReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context?, intent: Intent?) {
-        Log.d(TAG, "WakeUpReceiver déclenché à ${Calendar.getInstance().time}")
+        try {
+            Log.d(TAG, "WakeUpReceiver déclenché à ${Calendar.getInstance().time}")
 
-        context?.let { ctx ->
-            // Réveiller l'écran immédiatement
-            val powerManager = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
+            context?.let { ctx ->
+                // Réveiller l'écran immédiatement
+                val powerManager = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
 
-            // Wake lock puissant pour forcer le réveil
-            val wakeLock = powerManager.newWakeLock(
-                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
-                        PowerManager.ACQUIRE_CAUSES_WAKEUP or
-                        PowerManager.ON_AFTER_RELEASE,
-                "KioskApp:WakeUpReceiver"
-            )
-            wakeLock.acquire(10000) // 10 secondes pour assurer le réveil
+                // Wake lock puissant pour forcer le réveil
+                val wakeLock = powerManager.newWakeLock(
+                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
+                            PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                            PowerManager.ON_AFTER_RELEASE,
+                    "KioskApp:WakeUpReceiver"
+                )
+                
+                try {
+                    wakeLock.acquire(10000) // 10 secondes pour assurer le réveil
+                } catch (e: Exception) {
+                    Log.e(TAG, "Erreur acquisition WakeLock", e)
+                }
 
-            // Démarrer l'activité principale si elle n'est pas déjà au premier plan
-            val mainIntent = Intent(ctx, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP
-                putExtra("WAKE_UP_TRIGGER", true)
+                // Démarrer l'activité principale si elle n'est pas déjà au premier plan
+                val mainIntent = Intent(ctx, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    putExtra("WAKE_UP_TRIGGER", true)
+                }
+                
+                try {
+                    ctx.startActivity(mainIntent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Erreur démarrage MainActivity", e)
+                }
+
+                // Reprogrammer l'alarme pour le lendemain
+                scheduleNextAlarm(ctx)
+                
+                // Libérer le WakeLock
+                try {
+                    if (wakeLock.isHeld) {
+                        wakeLock.release()
+                    }
+                    else {
+                        //rien
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Erreur libération WakeLock", e)
+                }
             }
-            ctx.startActivity(mainIntent)
-
-            // Reprogrammer l'alarme pour le lendemain
-            scheduleNextAlarm(ctx)
+        } catch (e: Exception) {
+            Log.e(TAG, "Erreur dans onReceive", e)
         }
     }
 

@@ -7,13 +7,22 @@ import android.util.Log
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
-            Log.d("BootReceiver", "Boot terminé - Lancement MainActivity")
+        try {
+            if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
+                Log.d("BootReceiver", "Boot terminé - Lancement MainActivity")
 
-            val startIntent = Intent(context, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                val startIntent = Intent(context, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                
+                try {
+                    context.startActivity(startIntent)
+                } catch (e: Exception) {
+                    Log.e("BootReceiver", "Erreur démarrage MainActivity", e)
+                }
             }
-            context.startActivity(startIntent)
+        } catch (e: Exception) {
+            Log.e("BootReceiver", "Erreur dans onReceive", e)
         }
     }
 }

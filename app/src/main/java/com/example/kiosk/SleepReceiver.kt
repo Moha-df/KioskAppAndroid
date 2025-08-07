@@ -18,15 +18,23 @@ class SleepReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context?, intent: Intent?) {
-        Log.d(TAG, "SleepReceiver déclenché à ${Calendar.getInstance().time}")
+        try {
+            Log.d(TAG, "SleepReceiver déclenché à ${Calendar.getInstance().time}")
 
-        context?.let { ctx ->
-            // Envoyer un broadcast à l'activité principale
-            val sleepIntent = Intent("com.example.kiosk.SLEEP_TIME")
-            ctx.sendBroadcast(sleepIntent)
+            context?.let { ctx ->
+                // Envoyer un broadcast à l'activité principale
+                val sleepIntent = Intent("com.example.kiosk.SLEEP_TIME")
+                try {
+                    ctx.sendBroadcast(sleepIntent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Erreur envoi broadcast sleep", e)
+                }
 
-            // Reprogrammer l'alarme pour le lendemain
-            scheduleNextAlarm(ctx)
+                // Reprogrammer l'alarme pour le lendemain
+                scheduleNextAlarm(ctx)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Erreur dans onReceive", e)
         }
     }
 

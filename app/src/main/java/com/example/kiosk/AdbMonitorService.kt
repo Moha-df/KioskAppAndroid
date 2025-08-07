@@ -23,6 +23,7 @@ class AdbMonitorService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var isRunning = false
+    private var isDestroyed = false
 
     // Variables pour suivre l'état précédent et éviter les logs répétitifs
     private var lastAdbEnabled = -1
@@ -31,37 +32,59 @@ class AdbMonitorService : Service() {
 
     private val checkAdbRunnable = object : Runnable {
         override fun run() {
-            if (isRunning) {
-                checkAndMaintainAdb()
-                handler.postDelayed(this, CHECK_INTERVAL)
+            try {
+                if (isRunning && !isDestroyed) {
+                    checkAndMaintainAdb()
+                    handler.postDelayed(this, CHECK_INTERVAL)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Erreur dans checkAdbRunnable", e)
+                // Continuer malgré l'erreur
+                if (isRunning && !isDestroyed) {
+                    handler.postDelayed(this, CHECK_INTERVAL)
+                }
             }
         }
     }
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
-        Log.d(TAG, "Service ADB Monitor créé")
+        try {
+            createNotificationChannel()
+            Log.d(TAG, "Service ADB Monitor créé")
+        } catch (e: Exception) {
+            Log.e(TAG, "Erreur dans onCreate", e)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "Service ADB Monitor démarré")
+        try {
+            Log.d(TAG, "Service ADB Monitor démarré")
 
-        val notification = createNotification()
-        startForeground(NOTIFICATION_ID, notification)
+            val notification = createNotification()
+            startForeground(NOTIFICATION_ID, notification)
 
-        isRunning = true
-        handler.post(checkAdbRunnable)
+            isRunning = true
+            handler.post(checkAdbRunnable)
 
-        // Service persistant
-        return START_STICKY
+            // Service persistant
+            return START_STICKY
+        } catch (e: Exception) {
+            Log.e(TAG, "Erreur dans onStartCommand", e)
+            return START_NOT_STICKY
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "Service ADB Monitor arrêté")
+        isDestroyed = true
         isRunning = false
-        handler.removeCallbacks(checkAdbRunnable)
+        try {
+            handler.removeCallbacks(checkAdbRunnable)
+        } catch (e: Exception) {
+            Log.e(TAG, "Erreur dans onDestroy", e)
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -188,26 +211,42 @@ class AdbMonitorService : Service() {
     }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "ADB Monitor",
-            NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            description = "Surveillance et maintenance du débogage ADB"
-            setShowBadge(false)
-        }
+        try {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "ADB Monitor",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Surveillance et maintenance du débogage ADB"
+                setShowBadge(false)
+            }
 
-        val notificationManager = getSystemService(NotificationManager::class.java)
-        notificationManager.createNotificationChannel(channel)
+            val notificationManager = getSystemService(NotificationManager::class.java)
+            notificationManager.createNotificationChannel(channel)
+        } catch (e: Exception) {
+            Log.e(TAG, "Erreur création notification channel", e)
+        }
     }
 
     private fun createNotification(): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Kiosk ADB Monitor")
-            .setContentText("Surveillance du débogage ADB active")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true)
-            .build()
+        return try {
+            NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Kiosk ADB Monitor")
+                .setContentText("Surveillance du débogage ADB active")
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setOngoing(true)
+                .build()
+        } catch (e: Exception) {
+            Log.e(TAG, "Erreur création notification", e)
+            // Notification de fallback
+            NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Kiosk ADB Monitor")
+                .setContentText("Service actif")
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setOngoing(true)
+                .build()
+        }
     }
 }

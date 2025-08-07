@@ -17,41 +17,65 @@ class KioskDeviceAdminReceiver : DeviceAdminReceiver() {
     }
 
     override fun onEnabled(context: Context, intent: Intent) {
-        super.onEnabled(context, intent)
-        Log.d(TAG, "Device Admin activé")
+        try {
+            super.onEnabled(context, intent)
+            Log.d(TAG, "Device Admin activé")
 
-        val devicePolicyManager = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-        val componentName = ComponentName(context, KioskDeviceAdminReceiver::class.java)
+            val devicePolicyManager = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            val componentName = ComponentName(context, KioskDeviceAdminReceiver::class.java)
 
-        if (devicePolicyManager.isDeviceOwnerApp(context.packageName)) {
-            Log.d(TAG, "Device Owner détecté - Configuration ADB")
+            if (devicePolicyManager.isDeviceOwnerApp(context.packageName)) {
+                Log.d(TAG, "Device Owner détecté - Configuration ADB")
 
-            // Activer et maintenir ADB
-            enableAndMaintainAdb(context)
+                // Activer et maintenir ADB
+                enableAndMaintainAdb(context)
 
-            // Démarrer le service de monitoring
-            val serviceIntent = Intent(context, AdbMonitorService::class.java)
-            context.startForegroundService(serviceIntent)
+                // Démarrer le service de monitoring
+                try {
+                    val serviceIntent = Intent(context, AdbMonitorService::class.java)
+                    context.startForegroundService(serviceIntent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Erreur démarrage service ADB Monitor", e)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Erreur dans onEnabled", e)
         }
     }
 
     override fun onDisabled(context: Context, intent: Intent) {
-        super.onDisabled(context, intent)
-        Log.d(TAG, "Device Admin désactivé")
+        try {
+            super.onDisabled(context, intent)
+            Log.d(TAG, "Device Admin désactivé")
 
-        // Arrêter le service de monitoring
-        val serviceIntent = Intent(context, AdbMonitorService::class.java)
-        context.stopService(serviceIntent)
+            // Arrêter le service de monitoring
+            try {
+                val serviceIntent = Intent(context, AdbMonitorService::class.java)
+                context.stopService(serviceIntent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Erreur arrêt service ADB Monitor", e)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Erreur dans onDisabled", e)
+        }
     }
 
     override fun onLockTaskModeEntering(context: Context, intent: Intent, pkg: String) {
-        super.onLockTaskModeEntering(context, intent, pkg)
-        //Toast.makeText(context, "Entrée en mode Lock Task", Toast.LENGTH_SHORT).show()
+        try {
+            super.onLockTaskModeEntering(context, intent, pkg)
+            //Toast.makeText(context, "Entrée en mode Lock Task", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Log.e(TAG, "Erreur dans onLockTaskModeEntering", e)
+        }
     }
 
     override fun onLockTaskModeExiting(context: Context, intent: Intent) {
-        super.onLockTaskModeExiting(context, intent)
-        //Toast.makeText(context, "Sortie du mode Lock Task", Toast.LENGTH_SHORT).show()
+        try {
+            super.onLockTaskModeExiting(context, intent)
+            //Toast.makeText(context, "Sortie du mode Lock Task", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Log.e(TAG, "Erreur dans onLockTaskModeExiting", e)
+        }
     }
 
     private fun enableAndMaintainAdb(context: Context) {
