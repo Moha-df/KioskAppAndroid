@@ -508,7 +508,6 @@ class MainActivity : AppCompatActivity() {
 
         val timeSinceLastLoad = System.currentTimeMillis() - lastLoadTime
 
-        Log.d("MainActivity", "Avant IF: isPageLoaded=$isPageLoaded, timeSinceLastLoad=$timeSinceLastLoad")
         if (!isPageLoaded && timeSinceLastLoad > 300000) {
             if (isNetworkAvailable()) {
                 isReloadingInProgress = true
