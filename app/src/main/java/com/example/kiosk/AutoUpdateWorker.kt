@@ -5,10 +5,9 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
-import android.os.Build
+import android.content.pm.PackageInstaller
+import android.content.pm.PackageManager
 import android.util.Log
-import androidx.core.content.FileProvider
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import okhttp3.OkHttpClient
@@ -16,6 +15,7 @@ import okhttp3.Request
 import okhttp3.logging.HttpLoggingInterceptor
 import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 
 class AutoUpdateWorker(appContext: Context, workerParams: WorkerParameters) : CoroutineWorker(appContext, workerParams) {
@@ -26,12 +26,8 @@ class AutoUpdateWorker(appContext: Context, workerParams: WorkerParameters) : Co
 	}
 
 	private val client: OkHttpClient by lazy {
-		val logging = HttpLoggingInterceptor().apply {
-			level = HttpLoggingInterceptor.Level.BASIC
-		}
-		OkHttpClient.Builder()
-			.addInterceptor(logging)
-			.build()
+		val logging = HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC }
+		OkHttpClient.Builder().addInterceptor(logging).build()
 	}
 
 	override suspend fun doWork(): Result {
@@ -52,12 +48,30 @@ class AutoUpdateWorker(appContext: Context, workerParams: WorkerParameters) : Co
 
 			val currentVersionCode = applicationContext.packageManager.getPackageInfo(applicationContext.packageName, 0).longVersionCode
 			if (remoteVersionCode.toLong() <= currentVersionCode) {
-				Log.d(TAG, "No update needed. Remote=$remoteVersionCode, current=$currentVersionCode")
+				Log.d(TAG, "No update needed by JSON. Remote=$remoteVersionCode, current=$currentVersionCode")
 				return Result.success()
 			}
 
 			val apkFile = downloadApk(apkUrl) ?: return Result.retry()
-			val installed = installSilently(apkFile)
+
+			// Robustesse: vérifier la version réelle de l'APK téléchargée
+			val pm = applicationContext.packageManager
+			val archiveInfo = pm.getPackageArchiveInfo(apkFile.absolutePath, 0)
+			val downloadedVersion = when {
+				archiveInfo == null -> -1L
+				archiveInfo.longVersionCode > 0 -> archiveInfo.longVersionCode
+				else -> archiveInfo.versionCode.toLong()
+			}
+			if (downloadedVersion <= 0) {
+				Log.w(TAG, "Cannot read downloaded APK version, skipping install")
+				return Result.retry()
+			}
+			if (downloadedVersion <= currentVersionCode) {
+				Log.w(TAG, "Downloaded APK version ($downloadedVersion) is not higher than current ($currentVersionCode). Skipping.")
+				return Result.success()
+			}
+
+			val installed = installSilentlyWithSession(apkFile)
 			if (installed) Result.success() else Result.retry()
 		} catch (e: Exception) {
 			Log.e(TAG, "Error in auto-update", e)
@@ -74,10 +88,7 @@ class AutoUpdateWorker(appContext: Context, workerParams: WorkerParameters) : Co
 
 	private fun fetchUpdateJson(): JSONObject? {
 		return try {
-			val request = Request.Builder()
-				.url(UPDATE_URL)
-				.header("Cache-Control", "no-cache")
-				.build()
+			val request = Request.Builder().url(UPDATE_URL).header("Cache-Control", "no-cache").build()
 			client.newCall(request).execute().use { resp ->
 				if (!resp.isSuccessful) {
 					Log.w(TAG, "HTTP ${'$'}{resp.code}")
@@ -103,9 +114,7 @@ class AutoUpdateWorker(appContext: Context, workerParams: WorkerParameters) : Co
 				val targetDir = File(applicationContext.filesDir, "updates").apply { mkdirs() }
 				val outFile = File(targetDir, "update.apk")
 				resp.body?.byteStream()?.use { input ->
-					FileOutputStream(outFile).use { output ->
-						input.copyTo(output)
-					}
+					FileOutputStream(outFile).use { output -> input.copyTo(output) }
 				}
 				outFile
 			}
@@ -115,39 +124,31 @@ class AutoUpdateWorker(appContext: Context, workerParams: WorkerParameters) : Co
 		}
 	}
 
-	private fun installSilently(apk: File): Boolean {
+	private fun installSilentlyWithSession(apk: File): Boolean {
 		return try {
-			val dpm = applicationContext.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-			val component = ComponentName(applicationContext, KioskDeviceAdminReceiver::class.java)
+			val packageInstaller: PackageInstaller = applicationContext.packageManager.packageInstaller
+			val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+			params.setAppPackageName(applicationContext.packageName)
+			val sessionId = packageInstaller.createSession(params)
+			val session = packageInstaller.openSession(sessionId)
 
-			if (Build.VERSION.SDK_INT >= 23) {
-				// Device Owner silent install via PackageInstaller session through DPM is allowed when setInstallPackage
-				val packageUri: Uri = FileProvider.getUriForFile(
-					applicationContext,
-					applicationContext.packageName + ".fileprovider",
-					apk
-				)
-
-				val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
-				applicationContext.grantUriPermission("com.android.packageinstaller", packageUri, flags)
-
-				val installIntent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
-					setDataAndType(packageUri, "application/vnd.android.package-archive")
-					addFlags(flags)
-					putExtra(Intent.EXTRA_INSTALLER_PACKAGE_NAME, applicationContext.packageName)
-					putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
-					putExtra(Intent.EXTRA_RETURN_RESULT, true)
+			FileInputStream(apk).use { input ->
+				session.openWrite("base.apk", 0, apk.length()).use { out ->
+					input.copyTo(out)
+					session.fsync(out)
 				}
-
-				installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-				applicationContext.startActivity(installIntent)
-				Log.i(TAG, "Triggered installer UI")
-				return true
-			} else {
-				false
 			}
+
+			val intent = Intent(applicationContext, InstallResultReceiver::class.java)
+			val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+			val pendingIntent = PendingIntent.getBroadcast(applicationContext, sessionId, intent, flags)
+			session.commit(pendingIntent.intentSender)
+			session.close()
+
+			Log.i(TAG, "PackageInstaller session committed (silent)")
+			true
 		} catch (e: Exception) {
-			Log.e(TAG, "installSilently failed", e)
+			Log.e(TAG, "installSilentlyWithSession failed", e)
 			false
 		}
 	}

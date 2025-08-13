@@ -883,6 +883,9 @@ class MainActivity : AppCompatActivity() {
         val toggleKioskButton = dialogView.findViewById<Button>(R.id.toggleKioskButton)
         val applyButton = dialogView.findViewById<Button>(R.id.applyButton)
         val cancelConfigButton = dialogView.findViewById<Button>(R.id.cancelConfigButton)
+        val versionText = dialogView.findViewById<TextView>(R.id.versionText)
+
+        versionText.text = "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
 
         urlEdit.setText(currentUrl)
 

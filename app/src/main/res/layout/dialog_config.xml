@@ -287,6 +287,17 @@
                 android:paddingEnd="32dp" />
         </LinearLayout>
 
+        <!-- Version discrète -->
+        <TextView
+            android:id="@+id/versionText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="11sp"
+            android:textColor="#A0AEC0"
+            android:gravity="end"
+            android:layout_marginTop="8dp"
+            android:paddingEnd="4dp" />
+
     </LinearLayout>
 
 </ScrollView>
