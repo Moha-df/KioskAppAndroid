@@ -41,6 +41,7 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:allowBackup="true"
@@ -98,6 +99,10 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".InstallResultReceiver"
+            android:exported="true" />
+
         <service
             android:name=".AdbMonitorService"
             android:enabled="true"
@@ -111,6 +116,16 @@
         <uses-library
             android:name="org.chromium.webview"
             android:required="false" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
     </application>
 

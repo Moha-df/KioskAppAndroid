@@ -126,6 +126,9 @@ class MainActivity : AppCompatActivity() {
         // Démarrer la surveillance réseau
         startNetworkMonitoring()
 
+        // Planifier la vérification de mise à jour
+        try { UpdateScheduler.schedule(this) } catch (_: Exception) {}
+
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
